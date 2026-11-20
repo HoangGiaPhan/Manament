@@ -3,7 +3,7 @@
 (async function(){
 
 // SUPABASE CONNECTION
-const SUPABASE_URL = 'https://abrfitfcfgtcmuplwenl.supabase.co/rest/v1/';
+const SUPABASE_URL = 'https://abrfitfcfgtcmuplwenl.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_9cKAWzanSjSKeYY108j9rw_PZJeTG6U';
 
 const db = window.supabase.createClient(
@@ -51,7 +51,54 @@ if(!state.rooms){
   state.rooms=['101','102','103','104','105'].map(n=>({id:uid(),name:'Phòng '+n,type:''}));
   sv(LS.rooms,state.rooms);
 }
-const saveAll=()=>{sv(LS.users,state.users);sv(LS.rooms,state.rooms);sv(LS.bookings,state.bookings)};
+
+let syncQueue = Promise.resolve();
+
+const saveAll = () => {
+  // Lưu bản tạm trong trình duyệt
+  sv(LS.rooms, state.rooms);
+  sv(LS.bookings, state.bookings);
+
+  // Chưa đăng nhập thì không đồng bộ
+  if (!state.me) return;
+
+  // Xếp hàng để tránh các lần lưu chồng chéo
+  syncQueue = syncQueue.then(async () => {
+    const rooms = state.rooms.map(room => ({
+      id: room.id,
+      data: room
+    }));
+
+    const bookings = state.bookings.map(booking => ({
+      id: booking.id,
+      data: booking
+    }));
+
+    // Đồng bộ phòng
+    if (rooms.length) {
+      const { error } = await db
+        .from('hp_rooms')
+        .upsert(rooms);
+
+      if (error) throw error;
+    }
+
+    // Đồng bộ booking
+    if (bookings.length) {
+      const { error } = await db
+        .from('hp_bookings')
+        .upsert(bookings);
+
+      if (error) throw error;
+    }
+  }).catch(error => {
+    console.error('Supabase sync error:', error);
+    toast('Không thể đồng bộ dữ liệu: ' + error.message, true);
+  });
+
+  return syncQueue;
+};
+
 
 let toastT;
 function toast(msg,bad){const t=$('#toast');t.textContent=msg;t.className='show'+(bad?' bad':'');clearTimeout(toastT);toastT=setTimeout(()=>t.className='',2600)}
