@@ -1974,95 +1974,113 @@
     await loadUsers();
   }
 
-  /* ---------- CHANGE PASSWORD ---------- */
+ 
+/* ---------- CHANGE PASSWORD ---------- */
 
-  function pwModal() {
-    openModal(`<h3>Đổi mật khẩu</h3>
-      <form id="pf">
-        <div class="g2">
-          <div class="full">
-            <label>Mật khẩu hiện tại</label>
-            <input id="p0" type="password" required>
-          </div>
-
-          <div>
-            <label>Mật khẩu mới</label>
-            <input id="p1" type="password" minlength="8" required>
-          </div>
-
-          <div>
-            <label>Nhập lại</label>
-            <input id="p2" type="password" required>
-          </div>
+function pwModal() {
+  openModal(`<h3>Đổi mật khẩu</h3>
+    <form id="pf">
+      <div class="g2">
+        <div class="full">
+          <label>Mật khẩu hiện tại</label>
+          <input id="p0" type="password" required>
         </div>
 
-        <div class="err" id="pe"></div>
-
-        <div class="mfoot">
-          <button type="button" id="pc">Hủy</button>
-          <button class="primary">Đổi mật khẩu</button>
+        <div>
+          <label>Mật khẩu mới</label>
+          <input id="p1" type="password" minlength="8" required>
         </div>
-      </form>`);
 
-    $('#pc').onclick = closeModal;
+        <div>
+          <label>Nhập lại</label>
+          <input id="p2" type="password" required>
+        </div>
+      </div>
 
-    $('#pf').onsubmit = async e => {
-      e.preventDefault();
+      <div class="err" id="pe"></div>
 
-      const oldPassword = $('#p0').value;
-      const newPassword = $('#p1').value;
-      const errorBox = $('#pe');
-      const submit = $('#pf').querySelector('button.primary');
+      <div class="mfoot">
+        <button type="button" id="pc">Hủy</button>
+        <button class="primary">Đổi mật khẩu</button>
+      </div>
+    </form>`);
 
-      if (newPassword.length < 8) {
-        errorBox.textContent = 'Mật khẩu mới tối thiểu 8 ký tự.';
-        return;
+  $('#pc').onclick = closeModal;
+
+  $('#pf').onsubmit = async e => {
+    e.preventDefault();
+
+    const oldPassword = $('#p0').value;
+    const newPassword = $('#p1').value;
+    const errorBox = $('#pe');
+    const submit = $('#pf').querySelector('button.primary');
+
+    if (newPassword.length < 8) {
+      errorBox.textContent = 'Mật khẩu mới tối thiểu 8 ký tự.';
+      return;
+    }
+
+    if (newPassword !== $('#p2').value) {
+      errorBox.textContent = 'Nhập lại mật khẩu không khớp.';
+      return;
+    }
+
+    if (oldPassword === newPassword) {
+      errorBox.textContent = 'Mật khẩu mới phải khác mật khẩu hiện tại.';
+      return;
+    }
+
+    submit.disabled = true;
+
+    try {
+      errorBox.textContent = 'Đang kiểm tra phiên đăng nhập...';
+
+      // Kiểm tra phiên đăng nhập chính
+      const { data: sessionData, error: sessionError } =
+        await db.auth.getSession();
+
+      if (sessionError) throw sessionError;
+
+      if (!sessionData.session) {
+        throw new Error('Phiên đăng nhập đã hết hạn. Vui lòng đăng nhập lại.');
       }
 
-      if (newPassword !== $('#p2').value) {
-        errorBox.textContent = 'Nhập lại mật khẩu không khớp.';
-        return;
-      }
+      // Kiểm tra mật khẩu hiện tại bằng client riêng
+      errorBox.textContent = 'Đang xác minh mật khẩu hiện tại...';
 
-      if (oldPassword === newPassword) {
-        errorBox.textContent = 'Mật khẩu mới phải khác mật khẩu hiện tại.';
-        return;
-      }
-
-      submit.disabled = true;
-      errorBox.textContent = 'Đang kiểm tra mật khẩu hiện tại...';
-
-      try {
-        const { error: verifyError } =
-          await verifyClient.auth.signInWithPassword({
-            email: state.me.email,
-            password: oldPassword
-          });
-
-        if (verifyError) {
-          throw new Error('Mật khẩu hiện tại không đúng.');
-        }
-
-        await verifyClient.auth.signOut();
-
-        const { error } = await db.auth.updateUser({
-          password: newPassword
+      const { error: verifyError } =
+        await verifyClient.auth.signInWithPassword({
+          email: state.me.email,
+          password: oldPassword
         });
 
-        if (error) throw error;
-
-        closeModal();
-        toast('Đã đổi mật khẩu thành công.');
-
-      } catch (error) {
-        console.error('Change password error:', error);
-        errorBox.textContent =
-          error.message || 'Không đổi được mật khẩu.';
-      } finally {
-        submit.disabled = false;
+      if (verifyError) {
+        throw new Error('Mật khẩu hiện tại không đúng.');
       }
-    };
-  }
+
+      await verifyClient.auth.signOut();
+
+      // Đổi mật khẩu bằng phiên đăng nhập chính
+      errorBox.textContent = 'Đang đổi mật khẩu...';
+
+      const { error } = await db.auth.updateUser({
+        password: newPassword
+      });
+
+      if (error) throw error;
+
+      closeModal();
+      toast('Đã đổi mật khẩu thành công.');
+
+    } catch (error) {
+      console.error('Change password error:', error);
+      errorBox.textContent = error.message || 'Không đổi được mật khẩu.';
+    } finally {
+      submit.disabled = false;
+    }
+  };
+}
+
 
   /* ---------- BACKUP / EXPORT ---------- */
 
