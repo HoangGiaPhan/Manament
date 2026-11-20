@@ -11,7 +11,17 @@
   const SUPABASE_URL = 'https://abrfitfcfgtcmuplwenl.supabase.co';
   const SUPABASE_KEY = 'sb_publishable_9cKAWzanSjSKeYY108j9rw_PZJeTG6U';
 
-  const db = window.supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
+  const db = window.supabase.createClient(
+  SUPABASE_URL,
+  SUPABASE_KEY,
+  {
+    auth: {
+      persistSession: true,
+      autoRefreshToken: true,
+      detectSessionInUrl: true
+    }
+  }
+);
 
   // Client riêng để xác minh mật khẩu cũ, không thay phiên đăng nhập chính
   const verifyClient = window.supabase.createClient(
