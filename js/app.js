@@ -675,7 +675,7 @@
 
   $('#today').onclick = () => setDate(new Date());
 
-  $('#dpick').onchange = e => {
+  $('#dpick').on = e => {
     const d = parseDateInput(e.target.value);
 
     if (!d) {
@@ -1046,7 +1046,7 @@
 
   function openModal(html) {
     mbox.onclick = null;
-    mbox.onchange = null;
+    mbox.on = null;
     mbox.innerHTML = html;
     modal.classList.remove('hidden');
   }
@@ -1055,7 +1055,7 @@
     modal.classList.add('hidden');
     mbox.innerHTML = '';
     mbox.onclick = null;
-    mbox.onchange = null;
+    mbox.on = null;
   }
 
   modal.addEventListener('mousedown', e => {
@@ -1574,7 +1574,7 @@
     openModal('');
     draw();
 
-    mbox.onchange = async e => {
+    mbox.on = async e => {
       const target = e.target;
 
       if (!target.dataset.f) return;
@@ -1985,6 +1985,7 @@
   }
 
  
+
 /* ---------- CHANGE PASSWORD ---------- */
 
 function pwModal() {
@@ -2043,36 +2044,26 @@ function pwModal() {
     submit.disabled = true;
 
     try {
-      errorBox.textContent = 'Đang kiểm tra phiên đăng nhập...';
-
-      // Kiểm tra phiên đăng nhập chính
-      const { data: sessionData, error: sessionError } =
-        await db.auth.getSession();
-
-      if (sessionError) throw sessionError;
-
-      if (!sessionData.session) {
-        throw new Error('Phiên đăng nhập đã hết hạn. Vui lòng đăng nhập lại.');
-      }
-
-      // Kiểm tra mật khẩu hiện tại bằng client riêng
       errorBox.textContent = 'Đang xác minh mật khẩu hiện tại...';
 
-      const { error: verifyError } =
-        await verifyClient.auth.signInWithPassword({
+      // Đăng nhập lại bằng client chính để tạo phiên hợp lệ
+      const { data, error: loginError } =
+        await db.auth.signInWithPassword({
           email: state.me.email,
           password: oldPassword
         });
 
-      if (verifyError) {
+      if (loginError) {
         throw new Error('Mật khẩu hiện tại không đúng.');
       }
 
-      await verifyClient.auth.signOut();
+      if (!data.session) {
+        throw new Error('Không tạo được phiên đăng nhập mới.');
+      }
 
-      // Đổi mật khẩu bằng phiên đăng nhập chính
-      errorBox.textContent = 'Đang đổi mật khẩu...';
+      errorBox.textContent = 'Đang cập nhật mật khẩu...';
 
+      // Đổi mật khẩu bằng phiên vừa xác thực
       const { error } = await db.auth.updateUser({
         password: newPassword
       });
@@ -2084,12 +2075,14 @@ function pwModal() {
 
     } catch (error) {
       console.error('Change password error:', error);
-      errorBox.textContent = error.message || 'Không đổi được mật khẩu.';
+      errorBox.textContent =
+        error.message || 'Không đổi được mật khẩu.';
     } finally {
       submit.disabled = false;
     }
   };
 }
+
 
 
   /* ---------- BACKUP / EXPORT ---------- */
@@ -2277,14 +2270,6 @@ function pwModal() {
 
     reader.readAsText(file);
   };
-
-  /* ---------- AUTH STATE ---------- */
-
-  db.auth.onAuthStateChange(async (event) => {
-    if (event === 'PASSWORD_RECOVERY') {
-      setTimeout(recoveryModal, 0);
-    }
-  });
 
   /* ---------- START ---------- */
 
