@@ -1,6 +1,16 @@
 // Logic ứng dụng hiện tại, được tách khỏi HTML để dễ bảo trì.
 
 (async function(){
+
+// SUPABASE CONNECTION
+const SUPABASE_URL = 'https://abrfitfcfgtcmuplwenl.supabase.co/rest/v1/';
+const SUPABASE_KEY = 'sb_publishable_9cKAWzanSjSKeYY108j9rw_PZJeTG6U';
+
+const db = window.supabase.createClient(
+  SUPABASE_URL,
+  SUPABASE_KEY
+);
+
 const HW=64, ROOMW=124, SNAP=30;
 const HOUR=36e5, MIN=6e4, DAY=864e5;
 const LS={users:'hp_users',rooms:'hp_rooms',bookings:'hp_bookings',session:'hp_session'};
@@ -46,33 +56,110 @@ const saveAll=()=>{sv(LS.users,state.users);sv(LS.rooms,state.rooms);sv(LS.booki
 let toastT;
 function toast(msg,bad){const t=$('#toast');t.textContent=msg;t.className='show'+(bad?' bad':'');clearTimeout(toastT);toastT=setTimeout(()=>t.className='',2600)}
 
-/* ---------- Login ---------- */
+
+/* ---------- Login - Supabase ---------- */
+
 async function showLogin(){
-  $('#app').classList.add('hidden');$('#login').classList.remove('hidden');
-  const a=state.users.find(u=>u.username==='admin');
-  const d=await hashPw('admin','admin123');
-  $('#lh').classList.toggle('hidden',!(a&&a.hash===d));
+  $('#app').classList.add('hidden');
+  $('#login').classList.remove('hidden');
+  $('#lh').classList.add('hidden');
+  $('#le').textContent='';
   $('#lu').focus();
 }
-$('#lf').addEventListener('submit',async e=>{
-  e.preventDefault();
-  const u=$('#lu').value.trim(),p=$('#lp').value;
-  const user=state.users.find(x=>x.username.toLowerCase()===u.toLowerCase());
-  if(!user||user.hash!==await hashPw(user.username,p)){$('#le').textContent='Sai tài khoản hoặc mật khẩu';return}
-  $('#le').textContent='';$('#lp').value='';
-  sv(LS.session,{u:user.username});
-  enterApp(user);
-});
-function enterApp(user){
-  state.me=user;
-  $('#login').classList.add('hidden');$('#app').classList.remove('hidden');
-  $('#umBtn').textContent='👤 '+user.username+' ▾';
-  state.date=sod(new Date());
-  $('#dpick').value=dateInput(state.date);
-  renderGrid();scrollDefault();
+
+async function loadUserData(user){
+  // Lấy thông tin quyền của tài khoản
+  const { data: profile, error: profileError } = await db
+    .from('hp_profiles')
+    .select('id,email,role')
+    .eq('id', user.id)
+    .single();
+
+  if(profileError || !profile){
+    throw new Error('Không tìm thấy hồ sơ phân quyền. Hãy kiểm tra hp_profiles.');
+  }
+
+  // Tải danh sách phòng
+  const { data: rooms, error: roomsError } = await db
+    .from('hp_rooms')
+    .select('id,data');
+
+  if(roomsError) throw roomsError;
+
+  // Tải danh sách đặt phòng
+  const { data: bookings, error: bookingsError } = await db
+    .from('hp_bookings')
+    .select('id,data');
+
+  if(bookingsError) throw bookingsError;
+
+  state.rooms = (rooms || []).map(x => x.data);
+  state.bookings = (bookings || []).map(x => x.data);
+
+  return {
+    id: profile.id,
+    email: profile.email,
+    username: profile.email,
+    role: profile.role
+  };
 }
-function logout(){localStorage.removeItem(LS.session);state.me=null;showLogin()}
-const isMgr=()=>state.me&&state.me.role==='manager';
+
+$('#lf').addEventListener('submit', async e=>{
+  e.preventDefault();
+
+  const email = $('#lu').value.trim();
+  const password = $('#lp').value;
+
+  $('#le').textContent = 'Đang đăng nhập...';
+
+  try{
+    const { data, error } = await db.auth.signInWithPassword({
+      email,
+      password
+    });
+
+    if(error) throw error;
+
+    const user = await loadUserData(data.user);
+
+    $('#le').textContent = '';
+    $('#lp').value = '';
+
+    enterApp(user);
+
+  }catch(error){
+    console.error('Login error:', error);
+
+    $('#le').textContent =
+      error.message || 'Đăng nhập thất bại. Vui lòng thử lại.';
+
+    await db.auth.signOut();
+  }
+});
+
+function enterApp(user){
+  state.me = user;
+
+  $('#login').classList.add('hidden');
+  $('#app').classList.remove('hidden');
+
+  $('#umBtn').textContent = '👤 ' + user.email + ' ▾';
+
+  state.date = sod(new Date());
+  $('#dpick').value = dateInput(state.date);
+
+  renderGrid();
+  scrollDefault();
+}
+
+async function logout(){
+  await db.auth.signOut();
+  state.me = null;
+  showLogin();
+}
+
+const isMgr = () => state.me && state.me.role === 'manager';
+
 
 /* ---------- Grid ---------- */
 function barHtml(b,ds,de){
