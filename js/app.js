@@ -1988,99 +1988,84 @@
 
 /* ---------- CHANGE PASSWORD ---------- */
 
-function pwModal() {
-  openModal(`<h3>Đổi mật khẩu</h3>
-    <form id="pf">
-      <div class="g2">
-        <div class="full">
-          <label>Mật khẩu hiện tại</label>
-          <input id="p0" type="password" required>
-        </div>
 
-        <div>
-          <label>Mật khẩu mới</label>
-          <input id="p1" type="password" minlength="8" required>
-        </div>
+async function pwModal() {
+  const oldPassword = $('#oldPassword')?.value || '';
+  const newPassword = $('#newPassword')?.value || '';
+  const confirmPassword = $('#confirmPassword')?.value || '';
 
-        <div>
-          <label>Nhập lại</label>
-          <input id="p2" type="password" required>
-        </div>
-      </div>
+  if (!oldPassword || !newPassword || !confirmPassword) {
+    return toast('Vui lòng nhập đầy đủ thông tin', 'error');
+  }
 
-      <div class="err" id="pe"></div>
+  if (newPassword.length < 6) {
+    return toast('Mật khẩu mới phải có ít nhất 6 ký tự', 'error');
+  }
 
-      <div class="mfoot">
-        <button type="button" id="pc">Hủy</button>
-        <button class="primary">Đổi mật khẩu</button>
-      </div>
-    </form>`);
+  if (newPassword !== confirmPassword) {
+    return toast('Mật khẩu xác nhận không khớp', 'error');
+  }
 
-  $('#pc').onclick = closeModal;
+  if (oldPassword === newPassword) {
+    return toast('Mật khẩu mới phải khác mật khẩu cũ', 'error');
+  }
 
-  $('#pf').onsubmit = async e => {
-    e.preventDefault();
-
-    const oldPassword = $('#p0').value;
-    const newPassword = $('#p1').value;
-    const errorBox = $('#pe');
-    const submit = $('#pf').querySelector('button.primary');
-
-    if (newPassword.length < 8) {
-      errorBox.textContent = 'Mật khẩu mới tối thiểu 8 ký tự.';
-      return;
-    }
-
-    if (newPassword !== $('#p2').value) {
-      errorBox.textContent = 'Nhập lại mật khẩu không khớp.';
-      return;
-    }
-
-    if (oldPassword === newPassword) {
-      errorBox.textContent = 'Mật khẩu mới phải khác mật khẩu hiện tại.';
-      return;
-    }
-
-    submit.disabled = true;
-
-    try {
-      errorBox.textContent = 'Đang xác minh mật khẩu hiện tại...';
-
-      // Đăng nhập lại bằng client chính để tạo phiên hợp lệ
-      const { data, error: loginError } =
-        await db.auth.signInWithPassword({
-          email: state.me.email,
-          password: oldPassword
-        });
-
-      if (loginError) {
-        throw new Error('Mật khẩu hiện tại không đúng.');
-      }
-
-      if (!data.session) {
-        throw new Error('Không tạo được phiên đăng nhập mới.');
-      }
-
-      errorBox.textContent = 'Đang cập nhật mật khẩu...';
-
-      // Đổi mật khẩu bằng phiên vừa xác thực
-      const { error } = await db.auth.updateUser({
-        password: newPassword
+  try {
+    // Xác thực lại bằng mật khẩu hiện tại
+    const { data, error: loginError } =
+      await db.auth.signInWithPassword({
+        email: state.me.email,
+        password: oldPassword
       });
 
-      if (error) throw error;
+    if (loginError) throw loginError;
 
-      closeModal();
-      toast('Đã đổi mật khẩu thành công.');
-
-    } catch (error) {
-      console.error('Change password error:', error);
-      errorBox.textContent =
-        error.message || 'Không đổi được mật khẩu.';
-    } finally {
-      submit.disabled = false;
+    if (!data.session || !data.session.access_token || !data.session.refresh_token) {
+      throw new Error('Không tạo được phiên đăng nhập mới. Vui lòng đăng nhập lại.');
     }
-  };
+
+    // Đặt phiên đăng nhập vừa xác thực vào client
+    const { error: setSessionError } = await db.auth.setSession({
+      access_token: data.session.access_token,
+      refresh_token: data.session.refresh_token
+    });
+
+    if (setSessionError) throw setSessionError;
+
+    // Kiểm tra phiên hiện tại
+    const { data: sessionData, error: sessionError } =
+      await db.auth.getSession();
+
+    if (sessionError) throw sessionError;
+
+    if (!sessionData.session) {
+      throw new Error('Phiên đăng nhập không hợp lệ. Vui lòng đăng nhập lại.');
+    }
+
+    if (sessionData.session.user.id !== data.user.id) {
+      throw new Error('Tài khoản xác thực không khớp. Vui lòng đăng nhập lại.');
+    }
+
+    // Đổi mật khẩu
+    const { error: updateError } = await db.auth.updateUser({
+      password: newPassword
+    });
+
+    if (updateError) throw updateError;
+
+    // Đóng modal và thông báo
+    $('#pwModal')?.classList.remove('show');
+    toast('Đổi mật khẩu thành công!', 'success');
+
+    // Xóa các ô mật khẩu
+    if ($('#oldPassword')) $('#oldPassword').value = '';
+    if ($('#newPassword')) $('#newPassword').value = '';
+    if ($('#confirmPassword')) $('#confirmPassword').value = '';
+
+  } catch (error) {
+    console.error('CHANGE PASSWORD ERROR:', error);
+    toast(error.message || 'Không thể đổi mật khẩu', 'error');
+  }
 }
 
 
