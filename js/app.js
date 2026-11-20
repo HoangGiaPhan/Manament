@@ -1,6 +1,6 @@
 
 /* =========================================================
-   HOTEL BOOKING APP - SUPABASE VERSION
+   HOTEL BOOKING APP - COMPLETE SUPABASE VERSION
    ========================================================= */
 
 (async function () {
@@ -11,9 +11,19 @@
   const SUPABASE_URL = 'https://abrfitfcfgtcmuplwenl.supabase.co';
   const SUPABASE_KEY = 'sb_publishable_9cKAWzanSjSKeYY108j9rw_PZJeTG6U';
 
-  const db = window.supabase.createClient(
+  const db = window.supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
+
+  // Client riêng để xác minh mật khẩu cũ, không thay phiên đăng nhập chính
+  const verifyClient = window.supabase.createClient(
     SUPABASE_URL,
-    SUPABASE_KEY
+    SUPABASE_KEY,
+    {
+      auth: {
+        persistSession: false,
+        autoRefreshToken: false,
+        detectSessionInUrl: false
+      }
+    }
   );
 
   /* ---------- CONSTANTS ---------- */
@@ -22,9 +32,9 @@
   const ROOMW = 124;
   const SNAP = 30;
 
-  const HOUR = 36e5;
-  const MIN = 6e4;
-  const DAY = 864e5;
+  const HOUR = 3600000;
+  const MIN = 60000;
+  const DAY = 86400000;
 
   const LS = {
     rooms: 'hp_rooms',
@@ -52,20 +62,11 @@
   })[c]);
 
   const uid = () =>
-    Date.now().toString(36) + Math.random().toString(36).slice(2, 7);
+    Date.now().toString(36) + Math.random().toString(36).slice(2, 9);
 
   const pad = n => String(n).padStart(2, '0');
 
   const money = n => (Number(n) || 0).toLocaleString('vi-VN');
-
-  const ld = (k, d) => {
-    try {
-      const v = JSON.parse(localStorage.getItem(k));
-      return v ?? d;
-    } catch (e) {
-      return d;
-    }
-  };
 
   const sv = (k, v) =>
     localStorage.setItem(k, JSON.stringify(v));
@@ -82,8 +83,11 @@
     return `${pad(d.getDate())}/${pad(d.getMonth() + 1)}/${String(d.getFullYear()).slice(-2)} ${pad(d.getHours())}:${pad(d.getMinutes())}`;
   };
 
-  const fromInput = v => {
-    const m = String(v || '').trim().match(/^(\d{2})\/(\d{2})\/(\d{2})\s+(\d{2}):(\d{2})$/);
+  const fromInput = value => {
+    const m = String(value || '').trim().match(
+      /^(\d{2})\/(\d{2})\/(\d{2})\s+(\d{2}):(\d{2})$/
+    );
+
     if (!m) return NaN;
 
     const dd = +m[1];
@@ -97,8 +101,8 @@
     return d.getFullYear() === yy &&
       d.getMonth() === mm - 1 &&
       d.getDate() === dd &&
-      hh < 24 &&
-      mi < 60
+      hh >= 0 && hh < 24 &&
+      mi >= 0 && mi < 60
       ? d.getTime()
       : NaN;
   };
@@ -106,43 +110,33 @@
   const dateStr = d =>
     `${pad(d.getDate())}/${pad(d.getMonth() + 1)}/${String(d.getFullYear()).slice(-2)}`;
 
-  const dateInput = d => dateStr(d);
-
-  const parseDateInput = v => {
-    const m = String(v || '').trim().match(/^(\d{2})\/(\d{2})\/(\d{2})$/);
+  const parseDateInput = value => {
+    const m = String(value || '').trim().match(/^(\d{2})\/(\d{2})\/(\d{2})$/);
     if (!m) return null;
 
     const yy = 2000 + (+m[3]);
     const mm = +m[2];
     const dd = +m[1];
-
     const d = new Date(yy, mm - 1, dd);
 
     return d.getFullYear() === yy &&
       d.getMonth() === mm - 1 &&
-      d.getDate() === dd
-      ? d
-      : null;
+      d.getDate() === dd ? d : null;
   };
 
   const fmtT = ts => {
     const d = new Date(ts);
-    return pad(d.getHours()) + ':' + pad(d.getMinutes());
+    return `${pad(d.getHours())}:${pad(d.getMinutes())}`;
   };
 
   const fmtDT = ts => {
     const d = new Date(ts);
-    return fmtT(ts) + ' ' + pad(d.getDate()) + '/' + pad(d.getMonth() + 1);
+    return `${fmtT(ts)} ${pad(d.getDate())}/${pad(d.getMonth() + 1)}`;
   };
 
   const WD = [
-    'Chủ nhật',
-    'Thứ hai',
-    'Thứ ba',
-    'Thứ tư',
-    'Thứ năm',
-    'Thứ sáu',
-    'Thứ bảy'
+    'Chủ nhật', 'Thứ hai', 'Thứ ba', 'Thứ tư',
+    'Thứ năm', 'Thứ sáu', 'Thứ bảy'
   ];
 
   const norm = s =>
@@ -163,37 +157,39 @@
   };
 
   const isMgr = () =>
-    state.me && state.me.role === 'manager';
+    state.me?.role === 'manager';
 
   /* ---------- TOAST ---------- */
 
   let toastT;
 
-  function toast(msg, bad) {
-    const t = $('#toast');
-    if (!t) return;
+  function toast(message, bad = false) {
+    const el = $('#toast');
+    if (!el) return;
 
-    t.textContent = msg;
-    t.className = 'show' + (bad ? ' bad' : '');
+    el.textContent = message;
+    el.className = 'show' + (bad ? ' bad' : '');
 
     clearTimeout(toastT);
-    toastT = setTimeout(() => t.className = '', 3000);
+    toastT = setTimeout(() => {
+      el.className = '';
+    }, 3500);
   }
 
   /* ---------- BOOKING TIME ---------- */
 
-  const effectiveTimes = b => {
+  function effectiveTimes(b) {
     const now = Date.now();
 
-    let start = b.start;
-    let end = b.end;
+    let start = Number(b.start);
+    let end = Number(b.end);
 
     if (b.status === 'cancel') {
-      end = b.cancelledAt || b.end;
+      end = Number(b.cancelledAt || b.end);
     } else if (b.status === 'out') {
-      end = b.actualEnd || b.end;
+      end = Number(b.actualEnd || b.end);
     } else if (b.status === 'in') {
-      start = b.actualStart || b.start;
+      start = Number(b.actualStart || b.start);
       if (now > end) end = now;
     }
 
@@ -202,18 +198,17 @@
       end,
       now,
       lateCheckin:
-        (b.status === 'wait' || b.status === 'dep') &&
+        ['wait', 'dep'].includes(b.status) &&
         !b.actualStart &&
         now > b.start,
       overtime: b.status === 'in' && now > b.end
     };
-  };
+  }
 
   function fmtLate(ms) {
     const m = Math.max(0, Math.floor(ms / MIN));
     const h = Math.floor(m / 60);
     const r = m % 60;
-
     return h ? `${h} giờ ${r} phút` : `${r} phút`;
   }
 
@@ -229,36 +224,32 @@
       .single();
 
     if (profileError || !profile) {
-  console.error('Profile query failed:', profileError);
-
-  throw new Error(
-    'Lỗi hồ sơ: ' +
-    (profileError?.message || 'Không có dữ liệu') +
-    ' | Code: ' +
-    (profileError?.code || 'N/A')
-  );
-}
+      throw new Error(
+        'Không tải được hồ sơ tài khoản: ' +
+        (profileError?.message || 'Không tìm thấy hồ sơ')
+      );
+    }
 
     if (!['manager', 'staff'].includes(profile.role)) {
       throw new Error('Tài khoản chưa được cấp quyền hợp lệ.');
     }
 
-    const { data: rooms, error: roomsError } = await db
+    const { data: roomRows, error: roomsError } = await db
       .from('hp_rooms')
       .select('id,data');
 
     if (roomsError) throw roomsError;
 
-    const { data: bookings, error: bookingsError } = await db
+    const { data: bookingRows, error: bookingsError } = await db
       .from('hp_bookings')
       .select('id,data');
 
     if (bookingsError) throw bookingsError;
 
-    state.rooms = (rooms || []).map(x => x.data);
-    state.bookings = (bookings || []).map(x => x.data);
+    state.rooms = (roomRows || []).map(x => x.data);
+    state.bookings = (bookingRows || []).map(x => x.data);
 
-    // Tạo phòng mặc định nếu database chưa có phòng
+    // Chỉ tạo phòng mặc định khi quản lý đăng nhập lần đầu
     if (state.rooms.length === 0 && profile.role === 'manager') {
       state.rooms = ['101', '102', '103', '104', '105'].map(n => ({
         id: uid(),
@@ -291,7 +282,7 @@
     sv(LS.rooms, state.rooms);
     sv(LS.bookings, state.bookings);
 
-    if (!state.me) return;
+    if (!state.me) return false;
 
     const roomsSnapshot = state.rooms.map(room => ({
       id: room.id,
@@ -304,8 +295,7 @@
     }));
 
     syncQueue = syncQueue.then(async () => {
-      // Chỉ quản lý được ghi danh sách phòng
-      if (isMgr() && roomsSnapshot.length) {
+      if (isMgr()) {
         const { error } = await db
           .from('hp_rooms')
           .upsert(roomsSnapshot);
@@ -313,36 +303,38 @@
         if (error) throw error;
       }
 
-      // Nhân viên và quản lý đều được thêm/sửa booking
-      if (bookingsSnapshot.length) {
-        const { error } = await db
-          .from('hp_bookings')
-          .upsert(bookingsSnapshot);
+      const { error } = await db
+        .from('hp_bookings')
+        .upsert(bookingsSnapshot);
 
-        if (error) throw error;
-      }
+      if (error) throw error;
+
+      return true;
     }).catch(error => {
       console.error('Supabase sync error:', error);
-      toast('Lỗi đồng bộ: ' + error.message, true);
+      toast('Lỗi đồng bộ dữ liệu: ' + error.message, true);
+      return false;
     });
 
     return syncQueue;
   }
 
   async function deleteRoomFromDatabase(roomId, bookingIds) {
-    const { error: bookingError } = await db
-      .from('hp_bookings')
-      .delete()
-      .in('id', bookingIds);
+    if (bookingIds.length) {
+      const { error } = await db
+        .from('hp_bookings')
+        .delete()
+        .in('id', bookingIds);
 
-    if (bookingError) throw bookingError;
+      if (error) throw error;
+    }
 
-    const { error: roomError } = await db
+    const { error } = await db
       .from('hp_rooms')
       .delete()
       .eq('id', roomId);
 
-    if (roomError) throw roomError;
+    if (error) throw error;
   }
 
   /* ---------- LOGIN ---------- */
@@ -350,12 +342,34 @@
   async function showLogin() {
     $('#app').classList.add('hidden');
     $('#login').classList.remove('hidden');
-
-    if ($('#lh')) $('#lh').classList.add('hidden');
-
     $('#le').textContent = '';
     $('#lp').value = '';
     $('#lu').focus();
+  }
+
+  function enterApp(user) {
+    state.me = user;
+
+    $('#login').classList.add('hidden');
+    $('#app').classList.remove('hidden');
+
+    $('#umBtn').textContent = '👤 ' + user.email + ' ▾';
+
+    state.date = sod(new Date());
+    $('#dpick').value = dateStr(state.date);
+
+    renderGrid();
+    scrollDefault();
+  }
+
+  async function logout() {
+    await db.auth.signOut();
+
+    state.me = null;
+    state.rooms = [];
+    state.bookings = [];
+
+    showLogin();
   }
 
   $('#lf').addEventListener('submit', async e => {
@@ -383,7 +397,6 @@
 
     } catch (error) {
       console.error('Login error:', error);
-
       $('#le').textContent =
         error.message || 'Đăng nhập thất bại. Vui lòng thử lại.';
 
@@ -391,30 +404,107 @@
     }
   });
 
-  function enterApp(user) {
-    state.me = user;
+  /* ---------- FORGOT PASSWORD ---------- */
 
-    $('#login').classList.add('hidden');
-    $('#app').classList.remove('hidden');
+  $('#forgotPassword').onclick = async () => {
+    const email = $('#lu').value.trim();
 
-    $('#umBtn').textContent = '👤 ' + user.email + ' ▾';
+    if (!email) {
+      $('#le').textContent = 'Vui lòng nhập email trước.';
+      $('#lu').focus();
+      return;
+    }
 
-    state.date = sod(new Date());
-    $('#dpick').value = dateInput(state.date);
+    $('#le').textContent = 'Đang gửi email khôi phục...';
 
-    renderGrid();
-    scrollDefault();
+    try {
+      const redirectTo =
+        window.location.origin + window.location.pathname;
+
+      const { error } = await db.auth.resetPasswordForEmail(email, {
+        redirectTo
+      });
+
+      if (error) throw error;
+
+      $('#le').textContent =
+        'Nếu email hợp lệ, hệ thống sẽ gửi hướng dẫn đặt lại mật khẩu. Hãy kiểm tra hộp thư.';
+
+    } catch (error) {
+      console.error('Forgot password error:', error);
+      $('#le').textContent =
+        error.message || 'Không gửi được email khôi phục.';
+    }
+  };
+
+  function recoveryModal() {
+    $('#login').classList.remove('hidden');
+    $('#app').classList.add('hidden');
+
+    openModal(`<h3>Tạo mật khẩu mới</h3>
+      <form id="recoveryForm">
+        <div class="f">
+          <label>Mật khẩu mới (ít nhất 8 ký tự)</label>
+          <input id="recoveryPassword" type="password" minlength="8" required>
+        </div>
+
+        <div class="f">
+          <label>Nhập lại mật khẩu</label>
+          <input id="recoveryConfirm" type="password" required>
+        </div>
+
+        <div class="err" id="recoveryError"></div>
+
+        <div class="mfoot">
+          <button class="primary">Lưu mật khẩu mới</button>
+        </div>
+      </form>`);
+
+    $('#recoveryForm').onsubmit = async e => {
+      e.preventDefault();
+
+      const password = $('#recoveryPassword').value;
+      const confirmPassword = $('#recoveryConfirm').value;
+      const errorBox = $('#recoveryError');
+      const submit = $('#recoveryForm').querySelector('button');
+
+      if (password.length < 8) {
+        errorBox.textContent = 'Mật khẩu cần ít nhất 8 ký tự.';
+        return;
+      }
+
+      if (password !== confirmPassword) {
+        errorBox.textContent = 'Hai mật khẩu không khớp.';
+        return;
+      }
+
+      submit.disabled = true;
+      errorBox.textContent = 'Đang cập nhật mật khẩu...';
+
+      try {
+        const { error } = await db.auth.updateUser({ password });
+        if (error) throw error;
+
+        closeModal();
+        await db.auth.signOut();
+
+        showLogin();
+        $('#le').textContent =
+          'Đã đổi mật khẩu. Bạn có thể đăng nhập bằng mật khẩu mới.';
+
+      } catch (error) {
+        errorBox.textContent =
+          error.message || 'Không thể cập nhật mật khẩu.';
+        submit.disabled = false;
+      }
+    };
   }
 
-  async function logout() {
-    await db.auth.signOut();
-
-    state.me = null;
-    state.rooms = [];
-    state.bookings = [];
-
-    showLogin();
-  }
+  db.auth.onAuthStateChange(event => {
+    if (event === 'PASSWORD_RECOVERY') {
+      setTimeout(recoveryModal, 0);
+    }
+  });
 
   /* ---------- GRID ---------- */
 
@@ -425,8 +515,8 @@
 
     if (e <= s) return '';
 
-    const l = (s - ds) / HOUR * HW;
-    const w = Math.max((e - s) / HOUR * HW, 18);
+    const left = (s - ds) / HOUR * HW;
+    const width = Math.max((e - s) / HOUR * HW, 18);
 
     const cls =
       (t.start < ds ? ' cl' : '') +
@@ -448,7 +538,10 @@
       `Cọc: ${money(b.deposit)}đ` +
       `${b.note ? '\n' + b.note : ''}`;
 
-    return `<div class="bk s-${b.status}${t.lateCheckin ? ' late' : ''}${t.overtime ? ' overtime' : ''}${cls}" data-id="${esc(b.id)}" style="left:${l}px;width:${w}px" title="${esc(tip)}">
+    return `<div class="bk s-${esc(b.status)}${t.lateCheckin ? ' late' : ''}${t.overtime ? ' overtime' : ''}${cls}"
+      data-id="${esc(b.id)}"
+      style="left:${left}px;width:${width}px"
+      title="${esc(tip)}">
       <i class="rh rl"></i>
       <div><b>${esc(b.name)}</b> ${esc(b.phone || '')}</div>
       <div class="bs">${fmtT(t.start)}–${fmtT(t.end)}${b.deposit ? ' · cọc ' + money(b.deposit) : ''}</div>
@@ -465,41 +558,51 @@
     const ds = state.date.getTime();
     const de = ds + DAY;
 
-    let h = `<div class="grid" style="width:${ROOMW + 24 * HW}px"><div class="hdr"><div class="corner"><span class="ct">Giờ</span><span class="cb">Phòng</span></div>`;
+    let html = `<div class="grid" style="width:${ROOMW + 24 * HW}px">
+      <div class="hdr">
+        <div class="corner">
+          <span class="ct">Giờ</span>
+          <span class="cb">Phòng</span>
+        </div>`;
 
     for (let i = 0; i < 24; i++) {
-      h += `<div class="hh" style="width:${HW}px">${i}h</div>`;
+      html += `<div class="hh" style="width:${HW}px">${i}h</div>`;
     }
 
-    h += '</div>';
+    html += '</div>';
 
     if (!state.rooms.length) {
-      h += '<div class="empty">Chưa có phòng nào. ' +
-        (isMgr()
+      html += `<div class="empty">Chưa có phòng nào. ${
+        isMgr()
           ? 'Vào menu → Quản lý phòng để thêm.'
-          : 'Hãy nhờ quản lý thêm phòng.') +
-        '</div>';
+          : 'Hãy nhờ quản lý thêm phòng.'
+      }</div>`;
     }
 
-    state.rooms.forEach((r, ri) => {
-      h += `<div class="row">
-        <div class="rc"><b>${esc(r.name)}</b><small>${esc(r.type || '')}</small></div>
+    state.rooms.forEach((room, ri) => {
+      html += `<div class="row">
+        <div class="rc">
+          <b>${esc(room.name)}</b>
+          <small>${esc(room.type || '')}</small>
+        </div>
         <div class="track" data-ri="${ri}" style="width:${24 * HW}px">`;
 
       state.bookings
         .filter(b =>
-          b.roomId === r.id &&
+          b.roomId === room.id &&
           effectiveTimes(b).start < de &&
           effectiveTimes(b).end > ds
         )
-        .forEach(b => h += barHtml(b, ds, de));
+        .forEach(b => {
+          html += barHtml(b, ds, de);
+        });
 
-      h += '</div></div>';
+      html += '</div></div>';
     });
 
-    h += '<div class="nowline hidden" id="nowl"></div></div>';
+    html += '<div class="nowline hidden" id="nowl"></div></div>';
 
-    gw.innerHTML = h;
+    gw.innerHTML = html;
     gw.scrollLeft = sl;
     gw.scrollTop = st;
 
@@ -512,24 +615,17 @@
     if (!el) return;
 
     const ds = state.date.getTime();
-    const n = Date.now();
+    const now = Date.now();
 
-    if (n < ds || n >= ds + DAY) {
+    if (now < ds || now >= ds + DAY) {
       el.classList.add('hidden');
       return;
     }
 
     el.classList.remove('hidden');
-    el.style.left = (ROOMW + (n - ds) / HOUR * HW) + 'px';
-    el.innerHTML = `<span class="nowlabel">${fmtT(n)}</span>`;
+    el.style.left = (ROOMW + (now - ds) / HOUR * HW) + 'px';
+    el.innerHTML = `<span class="nowlabel">${fmtT(now)}</span>`;
   }
-
-  setInterval(() => {
-    if (state.me) {
-      updateNow();
-      renderGrid();
-    }
-  }, 60000);
 
   function updateSummary() {
     const ds = state.date.getTime();
@@ -541,32 +637,31 @@
       effectiveTimes(b).end > ds
     );
 
-    const dep = list.reduce((s, b) => s + (+b.deposit || 0), 0);
+    const deposit = list.reduce((sum, b) => sum + (+b.deposit || 0), 0);
 
     $('#sum').innerHTML =
-      `📅 <b>${WD[state.date.getDay()]}, ${pad(state.date.getDate())}/${pad(state.date.getMonth() + 1)}/${state.date.getFullYear()}</b> · ${list.length} lượt khách · Tổng cọc: ${money(dep)}đ`;
+      `📅 <b>${WD[state.date.getDay()]}, ${pad(state.date.getDate())}/${pad(state.date.getMonth() + 1)}/${state.date.getFullYear()}</b> · ${list.length} lượt khách · Tổng cọc: ${money(deposit)}đ`;
   }
 
   function scrollDefault() {
     const gw = $('#gw');
     const isToday = state.date.getTime() === sod(new Date()).getTime();
-    const hr = isToday ? Math.max(0, new Date().getHours() - 2) : 6;
-
-    gw.scrollLeft = hr * HW;
+    const hour = isToday ? Math.max(0, new Date().getHours() - 2) : 6;
+    gw.scrollLeft = hour * HW;
   }
 
   function setDate(d) {
     state.date = sod(d);
-    $('#dpick').value = dateInput(d);
+    $('#dpick').value = dateStr(d);
     renderGrid();
     scrollDefault();
   }
 
   $('#prev').onclick = () =>
-    setDate(new Date(state.date.getTime() - DAY + 12 * HOUR));
+    setDate(new Date(state.date.getTime() - DAY));
 
   $('#next').onclick = () =>
-    setDate(new Date(state.date.getTime() + DAY + 12 * HOUR));
+    setDate(new Date(state.date.getTime() + DAY));
 
   $('#today').onclick = () => setDate(new Date());
 
@@ -575,28 +670,34 @@
 
     if (!d) {
       toast('Ngày không hợp lệ. Nhập DD/MM/YY', true);
-      e.target.value = dateInput(state.date);
+      e.target.value = dateStr(state.date);
       return;
     }
 
     setDate(d);
   };
 
+  setInterval(() => {
+    if (state.me) {
+      renderGrid();
+    }
+  }, 60000);
+
   /* ---------- CONFLICT ---------- */
 
-  function findConflict(b) {
-    const bt = effectiveTimes(b);
+  function findConflict(booking) {
+    if (booking.status === 'cancel') return null;
 
-    return state.bookings.find(o => {
+    const bt = effectiveTimes(booking);
+
+    return state.bookings.find(other => {
       if (
-        o.id === b.id ||
-        o.status === 'cancel' ||
-        b.status === 'cancel' ||
-        o.roomId !== b.roomId
+        other.id === booking.id ||
+        other.status === 'cancel' ||
+        other.roomId !== booking.roomId
       ) return false;
 
-      const ot = effectiveTimes(o);
-
+      const ot = effectiveTimes(other);
       return bt.start < ot.end && bt.end > ot.start;
     });
   }
@@ -613,11 +714,11 @@
 
     const gw = $('#gw');
     const el = e.target.closest('.bk');
-    const tr = e.target.closest('.track');
+    const track = e.target.closest('.track');
 
     if (el) {
-      const b = state.bookings.find(x => x.id === el.dataset.id);
-      if (!b) return;
+      const booking = state.bookings.find(x => x.id === el.dataset.id);
+      if (!booking) return;
 
       const mode = e.target.classList.contains('rl')
         ? 'rl'
@@ -625,11 +726,11 @@
           ? 'rr'
           : 'mv';
 
-      const ri0 = state.rooms.findIndex(r => r.id === b.roomId);
+      const roomIndex = state.rooms.findIndex(r => r.id === booking.roomId);
 
       act = {
         type: 'bk',
-        b,
+        b: booking,
         el,
         mode,
         x0: e.clientX,
@@ -639,26 +740,26 @@
         sl0: gw.scrollLeft,
         moved: false,
         dm: 0,
-        ri0,
-        ri: ri0
+        ri0: roomIndex,
+        ri: roomIndex
       };
 
-    } else if (tr) {
+    } else if (track) {
+      const rect = track.getBoundingClientRect();
+
       act = {
         type: 'sel',
-        tr,
-        ri: +tr.dataset.ri,
+        tr: track,
+        ri: +track.dataset.ri,
         x0: e.clientX,
         y0: e.clientY,
         lx: e.clientX,
         ly: e.clientY,
         sl0: gw.scrollLeft,
         moved: false,
-        xr0: e.clientX - tr.getBoundingClientRect().left,
-        xr: 0
+        xr0: e.clientX - rect.left,
+        xr: e.clientX - rect.left
       };
-
-      act.xr = act.xr0;
 
     } else {
       return;
@@ -677,11 +778,15 @@
     if (!act || !act.moved) return;
 
     const gw = $('#gw');
-    const r = gw.getBoundingClientRect();
+    const rect = gw.getBoundingClientRect();
 
-    if (act.lx > r.right - 40) gw.scrollLeft += 14;
-    else if (act.lx < r.left + ROOMW + 30) gw.scrollLeft -= 14;
-    else return;
+    if (act.lx > rect.right - 40) {
+      gw.scrollLeft += 14;
+    } else if (act.lx < rect.left + ROOMW + 30) {
+      gw.scrollLeft -= 14;
+    } else {
+      return;
+    }
 
     applyAct();
   }
@@ -693,7 +798,9 @@
     act.ly = e.clientY;
 
     if (!act.moved) {
-      if (Math.hypot(e.clientX - act.x0, e.clientY - act.y0) < 5) return;
+      if (Math.hypot(e.clientX - act.x0, e.clientY - act.y0) < 5) {
+        return;
+      }
 
       act.moved = true;
 
@@ -717,49 +824,57 @@
       const dm = Math.round(dx / HW * 60 / SNAP) * SNAP;
       act.dm = dm;
 
-      const b = act.b;
+      const booking = act.b;
       const el = act.el;
       const ds = state.date.getTime();
 
       if (act.mode === 'mv') {
         const tracks = gw.querySelectorAll('.track');
-
         if (!tracks.length) return;
 
-        const t0 = tracks[0].getBoundingClientRect();
-        const rh = tracks[0].offsetHeight;
+        const first = tracks[0].getBoundingClientRect();
+        const rowHeight = tracks[0].offsetHeight;
 
-        let ri = Math.floor((act.ly - t0.top) / rh);
+        let ri = Math.floor((act.ly - first.top) / rowHeight);
         ri = Math.max(0, Math.min(tracks.length - 1, ri));
 
         act.ri = ri;
 
         el.style.transform =
-          `translate(${dm / 60 * HW}px,${(ri - act.ri0) * rh}px)`;
+          `translate(${dm / 60 * HW}px,${(ri - act.ri0) * rowHeight}px)`;
 
       } else {
-        let s = b.start;
-        let e = b.end;
+        let start = booking.start;
+        let end = booking.end;
 
         if (act.mode === 'rl') {
-          s = Math.min(b.start + dm * MIN, b.end - SNAP * MIN);
+          start = Math.min(
+            booking.start + dm * MIN,
+            booking.end - SNAP * MIN
+          );
         } else {
-          e = Math.max(b.end + dm * MIN, b.start + SNAP * MIN);
+          end = Math.max(
+            booking.end + dm * MIN,
+            booking.start + SNAP * MIN
+          );
         }
 
-        act.ns = s;
-        act.ne = e;
+        act.ns = start;
+        act.ne = end;
 
-        const vs = Math.max(s, ds);
-        const ve = Math.min(e, ds + DAY);
+        const visibleStart = Math.max(start, ds);
+        const visibleEnd = Math.min(end, ds + DAY);
 
-        el.style.left = (vs - ds) / HOUR * HW + 'px';
-        el.style.width = Math.max((ve - vs) / HOUR * HW, 18) + 'px';
+        el.style.left =
+          (visibleStart - ds) / HOUR * HW + 'px';
+
+        el.style.width =
+          Math.max((visibleEnd - visibleStart) / HOUR * HW, 18) + 'px';
       }
 
     } else {
-      const r = act.tr.getBoundingClientRect();
-      act.xr = act.lx - r.left;
+      const rect = act.tr.getBoundingClientRect();
+      act.xr = act.lx - rect.left;
 
       const px = SNAP / 60 * HW;
 
@@ -767,7 +882,10 @@
       let b = Math.max(act.xr0, act.xr);
 
       a = Math.max(0, Math.floor(a / px) * px);
-      b = Math.min(24 * HW, Math.max(Math.ceil(b / px) * px, a + px));
+      b = Math.min(
+        24 * HW,
+        Math.max(Math.ceil(b / px) * px, a + px)
+      );
 
       act.sb.style.left = a + 'px';
       act.sb.style.width = (b - a) + 'px';
@@ -775,6 +893,8 @@
   }
 
   function cleanupAct() {
+    if (!act) return;
+
     clearInterval(act.timer);
 
     window.removeEventListener('pointermove', onMoveA);
@@ -806,80 +926,105 @@
         return;
       }
 
-      const b = a.b;
+      const booking = a.b;
 
-      let s = b.start;
-      let e = b.end;
-      let room = b.roomId;
+      let start = booking.start;
+      let end = booking.end;
+      let roomId = booking.roomId;
 
       if (a.mode === 'mv') {
-        s += a.dm * MIN;
-        e += a.dm * MIN;
-        room = state.rooms[a.ri].id;
+        start += a.dm * MIN;
+        end += a.dm * MIN;
+
+        if (!state.rooms[a.ri]) {
+          renderGrid();
+          return;
+        }
+
+        roomId = state.rooms[a.ri].id;
+
       } else {
-        s = a.ns ?? s;
-        e = a.ne ?? e;
+        start = a.ns ?? start;
+        end = a.ne ?? end;
       }
 
-      if (s === b.start && e === b.end && room === b.roomId) {
+      if (
+        start === booking.start &&
+        end === booking.end &&
+        roomId === booking.roomId
+      ) {
         renderGrid();
         return;
       }
 
-      const c = findConflict({
-        ...b,
-        start: s,
-        end: e,
-        roomId: room
+      const conflict = findConflict({
+        ...booking,
+        start,
+        end,
+        roomId
       });
 
-      if (c) {
+      if (conflict) {
         toast(
-          `Trùng lịch với ${c.name} (${roomName(c.roomId)}, ${fmtDT(c.start)} → ${fmtDT(c.end)})`,
+          `Trùng lịch với ${conflict.name} (${roomName(conflict.roomId)}, ${fmtDT(conflict.start)} → ${fmtDT(conflict.end)})`,
           true
         );
-
         renderGrid();
         return;
       }
 
-      b.start = s;
-      b.end = e;
-      b.roomId = room;
-      b.updatedBy = state.me.username;
+      booking.start = start;
+      booking.end = end;
+      booking.roomId = roomId;
+      booking.updatedBy = state.me.username;
 
-      saveAll();
-      toast('Đã cập nhật lịch: ' + b.name);
       renderGrid();
+
+      saveAll().then(ok => {
+        if (ok) toast('Đã cập nhật lịch: ' + booking.name);
+      });
 
     } else {
       if (a.sb) a.sb.remove();
 
-      const pm = HW / 60;
+      const pxPerMinute = HW / 60;
 
-      let sm;
-      let em;
+      let startMinute;
+      let endMinute;
 
       if (!a.moved) {
-        sm = Math.floor(a.xr0 / HW * 60 / SNAP) * SNAP;
-        em = sm + 120;
+        startMinute =
+          Math.floor(a.xr0 / HW * 60 / SNAP) * SNAP;
+
+        endMinute = startMinute + 120;
+
       } else {
         const lo = Math.min(a.xr0, a.xr);
         const hi = Math.max(a.xr0, a.xr);
 
-        sm = Math.floor(lo / pm / SNAP) * SNAP;
-        em = Math.max(Math.ceil(hi / pm / SNAP) * SNAP, sm + SNAP);
+        startMinute =
+          Math.floor(lo / pxPerMinute / SNAP) * SNAP;
+
+        endMinute =
+          Math.max(
+            Math.ceil(hi / pxPerMinute / SNAP) * SNAP,
+            startMinute + SNAP
+          );
       }
 
-      sm = Math.max(0, sm);
-      em = Math.min(1440, em);
+      startMinute = Math.max(0, startMinute);
+      endMinute = Math.min(1440, endMinute);
 
-      if (em <= sm) em = sm + SNAP;
+      if (endMinute <= startMinute) {
+        endMinute = Math.min(1440, startMinute + SNAP);
+      }
+
+      if (!state.rooms[a.ri]) return;
 
       openBooking(null, {
         roomId: state.rooms[a.ri].id,
-        start: ds + sm * MIN,
-        end: ds + em * MIN
+        start: ds + startMinute * MIN,
+        end: ds + endMinute * MIN
       });
     }
   }
@@ -925,22 +1070,29 @@
       return;
     }
 
-    const b = id ? state.bookings.find(x => x.id === id) : null;
+    const booking = id
+      ? state.bookings.find(x => x.id === id)
+      : null;
+
+    if (id && !booking) {
+      toast('Không tìm thấy booking này.', true);
+      return;
+    }
 
     const ds = state.date.getTime();
 
-    let defS = ds + 14 * HOUR;
+    let defaultStart = ds + 14 * HOUR;
 
     if (ds === sod(new Date()).getTime()) {
-      const n = new Date();
-      n.setMinutes(0, 0, 0);
-      defS = n.getTime() + HOUR;
+      const now = new Date();
+      now.setMinutes(0, 0, 0);
+      defaultStart = now.getTime() + HOUR;
     }
 
-    const d = b || {
+    const d = booking || {
       roomId: pre?.roomId || state.rooms[0].id,
-      start: pre?.start ?? defS,
-      end: pre?.end ?? (pre?.start ?? defS) + 2 * HOUR,
+      start: pre?.start ?? defaultStart,
+      end: pre?.end ?? ((pre?.start ?? defaultStart) + 2 * HOUR),
       name: '',
       phone: '',
       guests: 1,
@@ -951,7 +1103,7 @@
       status: 'wait'
     };
 
-    openModal(`<h3>${b ? 'Sửa thông tin khách' : 'Thêm khách đặt phòng'}</h3>
+    openModal(`<h3>${booking ? 'Sửa thông tin khách' : 'Thêm khách đặt phòng'}</h3>
       <form id="bf">
         <div class="g2">
           <div>
@@ -966,30 +1118,38 @@
           <div>
             <label>Trạng thái</label>
             <select id="f_status">
-              ${Object.entries(STATUS).map(([k, v]) =>
-                `<option value="${k}" ${k === d.status ? 'selected' : ''}>${v}</option>`
+              ${Object.entries(STATUS).map(([key, value]) =>
+                `<option value="${key}" ${key === d.status ? 'selected' : ''}>${value}</option>`
               ).join('')}
             </select>
           </div>
 
           <div>
             <label>Giờ nhận phòng dự kiến</label>
-            <input type="text" id="f_start" value="${toInput(d.start)}" placeholder="DD/MM/YY HH:mm" required>
+            <input type="text" id="f_start"
+              value="${toInput(d.start)}"
+              placeholder="DD/MM/YY HH:mm" required>
           </div>
 
           <div>
             <label>Giờ trả phòng dự kiến</label>
-            <input type="text" id="f_end" value="${toInput(d.end)}" placeholder="DD/MM/YY HH:mm" required>
+            <input type="text" id="f_end"
+              value="${toInput(d.end)}"
+              placeholder="DD/MM/YY HH:mm" required>
           </div>
 
           <div>
             <label>Giờ nhận phòng thực tế</label>
-            <input type="text" id="f_actual_start" value="${b?.actualStart ? toInput(b.actualStart) : ''}" placeholder="DD/MM/YY HH:mm">
+            <input type="text" id="f_actual_start"
+              value="${booking?.actualStart ? toInput(booking.actualStart) : ''}"
+              placeholder="DD/MM/YY HH:mm">
           </div>
 
           <div>
             <label>Giờ trả phòng thực tế</label>
-            <input type="text" id="f_actual_end" value="${b?.actualEnd ? toInput(b.actualEnd) : ''}" placeholder="DD/MM/YY HH:mm">
+            <input type="text" id="f_actual_end"
+              value="${booking?.actualEnd ? toInput(booking.actualEnd) : ''}"
+              placeholder="DD/MM/YY HH:mm">
           </div>
 
           <div>
@@ -1009,7 +1169,9 @@
 
           <div>
             <label>Nguồn khách</label>
-            <input id="f_source" placeholder="Zalo, Facebook, Booking..." value="${esc(d.source)}">
+            <input id="f_source"
+              placeholder="Zalo, Facebook, Booking..."
+              value="${esc(d.source)}">
           </div>
 
           <div>
@@ -1041,108 +1203,110 @@
 
         <div class="err" id="f_err"></div>
 
-        ${b ? `<div style="font-size:12px;color:var(--muted)">
-          Tạo bởi ${esc(b.createdBy || '?')}
-          ${b.updatedBy ? ' · sửa bởi ' + esc(b.updatedBy) : ''}
+        ${booking ? `<div style="font-size:12px;color:var(--muted)">
+          Tạo bởi ${esc(booking.createdBy || '?')}
+          ${booking.updatedBy ? ' · sửa bởi ' + esc(booking.updatedBy) : ''}
         </div>` : ''}
 
         <div class="mfoot">
-          ${b && b.status !== 'cancel'
+          ${booking && booking.status !== 'cancel'
             ? '<button type="button" class="danger l" id="f_del">Hủy booking</button>'
             : ''}
 
-          ${b && b.status !== 'cancel' && b.status !== 'out'
+          ${booking && !['cancel', 'out'].includes(booking.status)
             ? '<button type="button" id="f_checkin">Nhận phòng ngay</button>'
             : ''}
 
-          ${b && b.status === 'in'
+          ${booking && booking.status === 'in'
             ? '<button type="button" class="primary" id="f_checkout">Trả phòng ngay</button>'
             : ''}
 
           <button type="button" id="f_cancel">Đóng</button>
           <button class="primary">Lưu</button>
         </div>
-      </form>
-    `);
+      </form>`);
 
-    const rest = () => {
+    const updateRest = () => {
       $('#rest').textContent = money(
         (+$('#f_total').value || 0) -
         (+$('#f_dep').value || 0)
       );
     };
 
-    rest();
+    updateRest();
 
-    $('#f_total').oninput = rest;
-    $('#f_dep').oninput = rest;
-
+    $('#f_total').oninput = updateRest;
+    $('#f_dep').oninput = updateRest;
     $('#f_cancel').onclick = closeModal;
 
-    if (b && b.status !== 'cancel') {
-      $('#f_del').onclick = () => {
-        if (!confirm('Hủy booking của khách "' + b.name + '"? Lịch sử booking sẽ được giữ lại.')) {
-          return;
-        }
+    if (booking && booking.status !== 'cancel') {
+      $('#f_del').onclick = async () => {
+        if (!confirm(
+          `Hủy booking của khách "${booking.name}"? Lịch sử sẽ được giữ lại.`
+        )) return;
 
-        b.status = 'cancel';
-        b.cancelledAt = Date.now();
-        b.cancelledBy = state.me.username;
+        booking.status = 'cancel';
+        booking.cancelledAt = Date.now();
+        booking.cancelledBy = state.me.username;
+        booking.updatedBy = state.me.username;
 
-        saveAll();
         closeModal();
         renderGrid();
-        toast('Đã hủy booking');
+
+        const ok = await saveAll();
+        if (ok) toast('Đã hủy booking');
       };
     }
 
-    if (b && b.status !== 'cancel' && b.status !== 'out') {
-      $('#f_checkin').onclick = () => {
+    if (booking && !['cancel', 'out'].includes(booking.status)) {
+      $('#f_checkin').onclick = async () => {
         if (!confirm('Xác nhận khách nhận phòng ngay?')) return;
 
-        b.actualStart = Date.now();
-        b.status = 'in';
-        b.updatedBy = state.me.username;
+        booking.actualStart = Date.now();
+        booking.status = 'in';
+        booking.updatedBy = state.me.username;
 
-        saveAll();
         closeModal();
         renderGrid();
-        toast('Đã ghi nhận giờ nhận phòng thực tế');
+
+        const ok = await saveAll();
+        if (ok) toast('Đã ghi nhận giờ nhận phòng thực tế');
       };
     }
 
-    if (b && b.status === 'in') {
-      $('#f_checkout').onclick = () => {
+    if (booking && booking.status === 'in') {
+      $('#f_checkout').onclick = async () => {
         if (!confirm('Xác nhận khách trả phòng ngay?')) return;
 
         const now = Date.now();
 
-        b.actualEnd = now;
-        b.status = 'out';
-        b.updatedBy = state.me.username;
+        booking.actualEnd = now;
+        booking.status = 'out';
+        booking.updatedBy = state.me.username;
 
-        saveAll();
         closeModal();
         renderGrid();
-        toast('Đã trả phòng lúc ' + fmtDT(now));
+
+        const ok = await saveAll();
+        if (ok) toast('Đã trả phòng lúc ' + fmtDT(now));
       };
     }
 
-    $('#bf').onsubmit = e => {
+    $('#bf').onsubmit = async e => {
       e.preventDefault();
 
       const nb = {
-        id: b ? b.id : uid(),
+        id: booking ? booking.id : uid(),
         roomId: $('#f_room').value,
         status: $('#f_status').value,
         start: fromInput($('#f_start').value),
         end: fromInput($('#f_end').value),
         name: $('#f_name').value.trim(),
         phone: $('#f_phone').value.trim(),
-        guests: +$('#f_guests').value || 1,
+        guests: Math.max(1, +$('#f_guests').value || 1),
         source: $('#f_source').value.trim(),
-        total: +$('#f_total').value || 0,
-        deposit: +$('#f_dep').value || 0,
+        total: Math.max(0, +$('#f_total').value || 0),
+        deposit: Math.max(0, +$('#f_dep').value || 0),
         note: $('#f_note').value.trim(),
         actualStart: $('#f_actual_start').value.trim()
           ? fromInput($('#f_actual_start').value)
@@ -1152,26 +1316,33 @@
           : null
       };
 
-      const err = m => {
-        $('#f_err').textContent = m;
+      const showError = message => {
+        $('#f_err').textContent = message;
       };
 
-      if (!nb.name) return err('Vui lòng nhập tên khách');
+      if (!nb.name) {
+        showError('Vui lòng nhập tên khách.');
+        return;
+      }
 
-      if (isNaN(nb.start) || isNaN(nb.end)) {
-        return err('Ngày giờ dự kiến không hợp lệ. Dùng DD/MM/YY HH:mm');
+      if (!Number.isFinite(nb.start) || !Number.isFinite(nb.end)) {
+        showError('Ngày giờ dự kiến không hợp lệ. Dùng DD/MM/YY HH:mm.');
+        return;
       }
 
       if (nb.end <= nb.start) {
-        return err('Giờ trả dự kiến phải sau giờ nhận dự kiến');
+        showError('Giờ trả dự kiến phải sau giờ nhận dự kiến.');
+        return;
       }
 
-      if (nb.actualStart !== null && isNaN(nb.actualStart)) {
-        return err('Giờ nhận thực tế không hợp lệ. Dùng DD/MM/YY HH:mm');
+      if (nb.actualStart !== null && !Number.isFinite(nb.actualStart)) {
+        showError('Giờ nhận thực tế không hợp lệ.');
+        return;
       }
 
-      if (nb.actualEnd !== null && isNaN(nb.actualEnd)) {
-        return err('Giờ trả thực tế không hợp lệ. Dùng DD/MM/YY HH:mm');
+      if (nb.actualEnd !== null && !Number.isFinite(nb.actualEnd)) {
+        showError('Giờ trả thực tế không hợp lệ.');
+        return;
       }
 
       if (
@@ -1179,19 +1350,34 @@
         nb.actualEnd !== null &&
         nb.actualEnd <= nb.actualStart
       ) {
-        return err('Giờ trả thực tế phải sau giờ nhận thực tế');
+        showError('Giờ trả thực tế phải sau giờ nhận thực tế.');
+        return;
       }
 
-      const c = findConflict(nb);
+      if (nb.actualStart !== null && nb.actualEnd !== null &&
+          nb.actualEnd <= nb.actualStart) {
+        showError('Khoảng thời gian thực tế không hợp lệ.');
+        return;
+      }
 
-      if (c) {
-        return err(
-          `Trùng lịch phòng ${roomName(c.roomId)}: ${c.name} (${fmtDT(c.start)} → ${fmtDT(c.end)})`
+      if (nb.deposit > nb.total && nb.total > 0) {
+        showError('Tiền cọc không thể lớn hơn tổng tiền.');
+        return;
+      }
+
+      const conflict = findConflict(nb);
+
+      if (conflict) {
+        showError(
+          `Trùng lịch phòng ${roomName(conflict.roomId)}: ${conflict.name} (${fmtDT(conflict.start)} → ${fmtDT(conflict.end)})`
         );
+        return;
       }
 
-      if (b) {
-        Object.assign(b, nb, {
+      if (booking) {
+        Object.assign(booking, nb, {
+          createdBy: booking.createdBy,
+          createdAt: booking.createdAt,
           updatedBy: state.me.username
         });
       } else {
@@ -1200,22 +1386,29 @@
         state.bookings.push(nb);
       }
 
-      saveAll();
+      const submit = $('#bf').querySelector('button.primary');
+      submit.disabled = true;
+
+      const oldDate = state.date.getTime();
       closeModal();
 
-      if (
-        nb.end <= state.date.getTime() ||
-        nb.start >= state.date.getTime() + DAY
-      ) {
-        setDate(new Date(nb.start));
-      } else {
-        renderGrid();
+      if (nb.start < oldDate || nb.start >= oldDate + DAY) {
+        state.date = sod(new Date(nb.start));
+        $('#dpick').value = dateStr(state.date);
       }
 
-      toast('Đã lưu');
+      renderGrid();
+
+      const ok = await saveAll();
+
+      if (ok) {
+        toast('Đã lưu booking thành công');
+      } else {
+        toast('Chưa đồng bộ được booking lên máy chủ. Vui lòng kiểm tra kết nối.', true);
+      }
     };
 
-    setTimeout(() => $('#f_name').focus(), 30);
+    setTimeout(() => $('#f_name')?.focus(), 30);
   }
 
   $('#addBk').onclick = () => openBooking();
@@ -1223,18 +1416,18 @@
   /* ---------- SEARCH ---------- */
 
   $('#q').addEventListener('input', e => {
-    const q = norm(e.target.value.trim());
+    const query = norm(e.target.value.trim());
     const box = $('#qres');
 
-    if (!q) {
+    if (!query) {
       box.classList.add('hidden');
       return;
     }
 
-    const res = state.bookings
+    const results = state.bookings
       .filter(b =>
-        norm(b.name).includes(q) ||
-        norm(b.phone).includes(q)
+        norm(b.name).includes(query) ||
+        norm(b.phone).includes(query)
       )
       .sort((a, b) =>
         Math.abs(a.start - Date.now()) -
@@ -1242,8 +1435,8 @@
       )
       .slice(0, 8);
 
-    box.innerHTML = res.length
-      ? res.map(b => `<div data-id="${esc(b.id)}">
+    box.innerHTML = results.length
+      ? results.map(b => `<div data-id="${esc(b.id)}">
           <b>${esc(b.name)}</b> ${esc(b.phone || '')}
           <small>${esc(roomName(b.roomId))} · ${fmtDT(b.start)} → ${fmtDT(b.end)}${b.status === 'cancel' ? ' · ĐÃ HỦY' : ''}</small>
         </div>`).join('')
@@ -1253,17 +1446,17 @@
   });
 
   $('#qres').addEventListener('click', e => {
-    const it = e.target.closest('[data-id]');
-    if (!it) return;
+    const item = e.target.closest('[data-id]');
+    if (!item) return;
 
-    const b = state.bookings.find(x => x.id === it.dataset.id);
-    if (!b) return;
+    const booking = state.bookings.find(x => x.id === item.dataset.id);
+    if (!booking) return;
 
     $('#qres').classList.add('hidden');
     $('#q').value = '';
 
-    setDate(new Date(b.start));
-    openBooking(b.id);
+    setDate(new Date(booking.start));
+    openBooking(booking.id);
   });
 
   /* ---------- USER MENU ---------- */
@@ -1271,20 +1464,20 @@
   $('#umBtn').onclick = e => {
     e.stopPropagation();
 
-    const p = $('#um');
+    const menu = $('#um');
 
-    if (!p.classList.contains('hidden')) {
-      p.classList.add('hidden');
+    if (!menu.classList.contains('hidden')) {
+      menu.classList.add('hidden');
       return;
     }
 
-    p.innerHTML = `<div class="who">
+    menu.innerHTML = `<div class="who">
         ${esc(state.me.username)} · ${isMgr() ? 'Quản lý' : 'Nhân viên'}
       </div>
 
       ${isMgr() ? `
         <button data-a="rooms">🛏 Quản lý phòng</button>
-        <button data-a="users">👥 Tạo tài khoản</button>
+        <button data-a="users">👥 Quản lý tài khoản</button>
         <button data-a="export">⬇ Sao lưu dữ liệu</button>
         <button data-a="import">⬆ Khôi phục dữ liệu</button>
       ` : ''}
@@ -1292,23 +1485,26 @@
       <button data-a="pw">🔑 Đổi mật khẩu</button>
       <button data-a="out">🚪 Đăng xuất</button>`;
 
-    p.classList.remove('hidden');
+    menu.classList.remove('hidden');
   };
 
   $('#um').onclick = e => {
-    const a = e.target.dataset.a;
-    if (!a) return;
+    const button = e.target.closest('[data-a]');
+    if (!button) return;
 
+    const action = button.dataset.a;
     $('#um').classList.add('hidden');
 
-    ({
+    const actions = {
       rooms: roomsModal,
       users: usersModal,
       export: exportData,
       import: () => $('#importFile').click(),
       pw: pwModal,
       out: logout
-    })[a]();
+    };
+
+    actions[action]?.();
   };
 
   document.addEventListener('click', e => {
@@ -1324,16 +1520,34 @@
   /* ---------- ROOMS ---------- */
 
   function roomsModal() {
+    if (!isMgr()) {
+      toast('Bạn không có quyền quản lý phòng.', true);
+      return;
+    }
+
     const draw = () => {
       mbox.innerHTML = `<h3>Quản lý phòng</h3>
+
         <div class="list">
-          ${state.rooms.map((r, i) => `<div class="rrow">
-            <input data-f="name" data-i="${i}" value="${esc(r.name)}" placeholder="Tên phòng">
-            <input data-f="type" data-i="${i}" value="${esc(r.type || '')}" placeholder="Loại / ghi chú">
-            <button data-up="${i}" title="Lên">↑</button>
-            <button data-dn="${i}" title="Xuống">↓</button>
-            <button class="danger" data-del="${i}" title="Xóa phòng">🗑</button>
-          </div>`).join('') || '<div class="empty">Chưa có phòng</div>'}
+          ${state.rooms.map((room, i) => `
+            <div class="rrow">
+              <input
+                data-f="name"
+                data-i="${i}"
+                value="${esc(room.name)}"
+                placeholder="Tên phòng">
+
+              <input
+                data-f="type"
+                data-i="${i}"
+                value="${esc(room.type || '')}"
+                placeholder="Loại / ghi chú">
+
+              <button data-up="${i}" title="Lên">↑</button>
+              <button data-dn="${i}" title="Xuống">↓</button>
+              <button class="danger" data-del="${i}" title="Xóa phòng">🗑</button>
+            </div>
+          `).join('') || '<div class="empty">Chưa có phòng</div>'}
         </div>
 
         <div class="rrow">
@@ -1350,21 +1564,54 @@
     openModal('');
     draw();
 
-    mbox.onchange = e => {
-      const t = e.target;
+    mbox.onchange = async e => {
+      const target = e.target;
 
-      if (t.dataset.f) {
-        state.rooms[+t.dataset.i][t.dataset.f] = t.value.trim();
-        saveAll();
-        renderGrid();
+      if (!target.dataset.f) return;
+
+      const index = Number(target.dataset.i);
+      const field = target.dataset.f;
+
+      if (!state.rooms[index]) return;
+
+      const oldValue = state.rooms[index][field];
+      const newValue = target.value.trim();
+
+      if (field === 'name' && !newValue) {
+        target.value = oldValue;
+        toast('Tên phòng không được để trống.', true);
+        return;
       }
+
+      if (
+        field === 'name' &&
+        state.rooms.some((room, i) =>
+          i !== index && norm(room.name) === norm(newValue)
+        )
+      ) {
+        target.value = oldValue;
+        toast('Tên phòng đã tồn tại.', true);
+        return;
+      }
+
+      state.rooms[index][field] = newValue;
+
+      const ok = await saveAll();
+
+      if (!ok) {
+        state.rooms[index][field] = oldValue;
+        target.value = oldValue;
+        toast('Không lưu được thông tin phòng.', true);
+      }
+
+      renderGrid();
     };
 
     mbox.onclick = async e => {
-      const t = e.target.closest('button');
-      if (!t) return;
+      const button = e.target.closest('button');
+      if (!button) return;
 
-      const d = t.dataset;
+      const d = button.dataset;
 
       if (d.done) {
         closeModal();
@@ -1372,43 +1619,62 @@
       }
 
       if (d.add) {
-        const n = $('#nrn').value.trim();
+        const name = $('#nrn').value.trim();
+        const type = $('#nrt').value.trim();
 
-        if (!n) {
-          toast('Nhập tên phòng', true);
+        if (!name) {
+          toast('Vui lòng nhập tên phòng.', true);
           return;
         }
 
-        if (state.rooms.some(r => norm(r.name) === norm(n))) {
-          toast('Tên phòng đã tồn tại', true);
+        if (state.rooms.some(r => norm(r.name) === norm(name))) {
+          toast('Tên phòng đã tồn tại.', true);
           return;
         }
 
-        state.rooms.push({
+        const room = {
           id: uid(),
-          name: n,
-          type: $('#nrt').value.trim()
-        });
+          name,
+          type
+        };
+
+        state.rooms.push(room);
+
+        const ok = await saveAll();
+
+        if (!ok) {
+          state.rooms = state.rooms.filter(r => r.id !== room.id);
+          toast('Không lưu được phòng mới.', true);
+          return;
+        }
 
       } else if (d.up !== undefined) {
-        const i = +d.up;
+        const i = Number(d.up);
 
         if (i > 0) {
           [state.rooms[i - 1], state.rooms[i]] =
             [state.rooms[i], state.rooms[i - 1]];
         }
 
+        const ok = await saveAll();
+        if (!ok) toast('Không lưu được thứ tự phòng.', true);
+
       } else if (d.dn !== undefined) {
-        const i = +d.dn;
+        const i = Number(d.dn);
 
         if (i < state.rooms.length - 1) {
           [state.rooms[i + 1], state.rooms[i]] =
             [state.rooms[i], state.rooms[i + 1]];
         }
 
+        const ok = await saveAll();
+        if (!ok) toast('Không lưu được thứ tự phòng.', true);
+
       } else if (d.del !== undefined) {
-        const index = +d.del;
+        const index = Number(d.del);
         const room = state.rooms[index];
+
+        if (!room) return;
 
         const related = state.bookings.filter(b => b.roomId === room.id);
         const bookingIds = related.map(b => b.id);
@@ -1416,7 +1682,7 @@
         if (!confirm(
           `Xóa ${room.name}?` +
           (related.length
-            ? `\nPhòng này có ${related.length} lượt đặt, tất cả sẽ bị xóa theo.`
+            ? `\nPhòng này có ${related.length} lượt đặt. Tất cả booking của phòng cũng sẽ bị xóa.`
             : '')
         )) return;
 
@@ -1426,8 +1692,14 @@
           state.bookings = state.bookings.filter(b => b.roomId !== room.id);
           state.rooms.splice(index, 1);
 
+          sv(LS.rooms, state.rooms);
+          sv(LS.bookings, state.bookings);
+
+          toast('Đã xóa phòng.');
+
         } catch (error) {
-          toast('Không xóa được: ' + error.message, true);
+          console.error('Delete room error:', error);
+          toast('Không xóa được phòng: ' + error.message, true);
           return;
         }
 
@@ -1435,7 +1707,6 @@
         return;
       }
 
-      await saveAll();
       renderGrid();
       draw();
     };
@@ -1443,254 +1714,265 @@
 
   /* ---------- USERS ---------- */
 
-  
-async function usersModal() {
-  const escapeHTML = value => String(value ?? '').replace(/[&<>"']/g, char => ({
-    '&': '&amp;',
-    '<': '&lt;',
-    '>': '&gt;',
-    '"': '&quot;',
-    "'": '&#39;'
-  })[char]);
-
-  const callAdmin = async (action, extra = {}) => {
-    const { data, error } = await db.functions.invoke(
-      'dynamic-processor',
-      { body: { action, ...extra } }
-    );
-
-    if (error) throw error;
-    if (data?.error) throw new Error(data.error);
-
-    return data;
-  };
-
-  openModal(`
-    <div style="display:flex;justify-content:space-between;align-items:center;gap:10px">
-      <h3>Quản lý tài khoản</h3>
-      <button type="button" id="closeUsers">Đóng</button>
-    </div>
-
-    <div id="usersError" class="err"></div>
-
-    <div style="display:flex;justify-content:space-between;align-items:center;margin:12px 0">
-      <strong>Danh sách tài khoản</strong>
-      <button type="button" class="primary" id="showCreateUser">
-        + Tạo tài khoản
-      </button>
-    </div>
-
-    <div id="usersList">Đang tải danh sách...</div>
-
-    <div id="createUserArea" class="hidden">
-      <hr>
-      <h3>Tạo tài khoản mới</h3>
-
-      <form id="newUserForm">
-        <div class="g2">
-          <div class="full">
-            <label>Email đăng nhập</label>
-            <input id="newEmail" type="email" required>
-          </div>
-
-          <div class="full">
-            <label>Mật khẩu (ít nhất 8 ký tự)</label>
-            <input id="newPassword" type="password" minlength="8" required>
-          </div>
-
-          <div class="full">
-            <label>Quyền</label>
-            <select id="newRole">
-              <option value="staff">Nhân viên</option>
-              <option value="manager">Quản lý</option>
-            </select>
-          </div>
-        </div>
-
-        <div class="err" id="newUserError"></div>
-
-        <div class="mfoot">
-          <button type="button" id="cancelCreateUser">Hủy</button>
-          <button class="primary">Tạo tài khoản</button>
-        </div>
-      </form>
-    </div>
-  `);
-
-  const errorBox = $('#usersError');
-  const listBox = $('#usersList');
-  const createArea = $('#createUserArea');
-
-  $('#closeUsers').onclick = closeModal;
-
-  $('#showCreateUser').onclick = () => {
-    createArea.classList.toggle('hidden');
-  };
-
-  $('#cancelCreateUser').onclick = () => {
-    createArea.classList.add('hidden');
-  };
-
-  // Tải danh sách tài khoản
-  async function loadUsers() {
-    listBox.innerHTML = 'Đang tải danh sách...';
-    errorBox.textContent = '';
-
-    try {
-      const result = await callAdmin('list');
-      const users = result.users || [];
-
-      if (!users.length) {
-        listBox.innerHTML = '<p>Chưa có tài khoản nào.</p>';
-        return;
-      }
-
-      listBox.innerHTML = users.map(u => {
-        const isMe = u.id === state.me?.id;
-        const roleName = u.role === 'manager' ? 'Quản lý' : 'Nhân viên';
-
-        return `
-          <div style="
-            border:1px solid var(--border,#ddd);
-            border-radius:8px;
-            padding:12px;
-            margin-bottom:10px;
-          ">
-            <div style="font-weight:600;overflow-wrap:anywhere">
-              ${escapeHTML(u.email)}
-              ${isMe ? '<small>(Bạn)</small>' : ''}
-            </div>
-
-            <div style="margin:6px 0">
-              Quyền: <strong>${roleName}</strong>
-            </div>
-
-            ${!isMe ? `
-              <div style="display:flex;gap:6px;flex-wrap:wrap;margin-top:10px">
-                <button type="button"
-                  data-action="role"
-                  data-id="${escapeHTML(u.id)}"
-                  data-role="${escapeHTML(u.role)}">
-                  Đổi quyền
-                </button>
-
-                <button type="button"
-                  data-action="password"
-                  data-id="${escapeHTML(u.id)}">
-                  Đặt lại mật khẩu
-                </button>
-
-                <button type="button"
-                  data-action="delete"
-                  data-id="${escapeHTML(u.id)}"
-                  style="color:#dc2626">
-                  Xóa tài khoản
-                </button>
-              </div>
-            ` : ''}
-          </div>
-        `;
-      }).join('');
-
-    } catch (error) {
-      console.error('Load users error:', error);
-      listBox.innerHTML = '';
-      errorBox.textContent = error.message || 'Không tải được danh sách tài khoản';
-    }
-  }
-
-  // Tạo tài khoản
-  $('#newUserForm').onsubmit = async e => {
-    e.preventDefault();
-
-    const email = $('#newEmail').value.trim();
-    const password = $('#newPassword').value;
-    const role = $('#newRole').value;
-    const formError = $('#newUserError');
-
-    if (password.length < 8) {
-      formError.textContent = 'Mật khẩu cần ít nhất 8 ký tự';
+  async function usersModal() {
+    if (!isMgr()) {
+      toast('Bạn không có quyền quản lý tài khoản.', true);
       return;
     }
 
-    formError.textContent = 'Đang tạo tài khoản...';
+    const callAdmin = async (action, extra = {}) => {
+      const { data, error } = await db.functions.invoke(
+        'dynamic-processor',
+        { body: { action, ...extra } }
+      );
 
-    try {
-      await callAdmin('create', { email, password, role });
+      if (error) throw error;
+      if (data?.error) throw new Error(data.error);
 
-      toast('Đã tạo tài khoản thành công');
+      return data;
+    };
 
-      $('#newUserForm').reset();
+    openModal(`
+      <div style="display:flex;justify-content:space-between;align-items:center;gap:10px">
+        <h3>Quản lý tài khoản</h3>
+        <button type="button" id="closeUsers">Đóng</button>
+      </div>
+
+      <div id="usersError" class="err"></div>
+
+      <div style="display:flex;justify-content:space-between;align-items:center;margin:12px 0">
+        <strong>Danh sách tài khoản</strong>
+        <button type="button" class="primary" id="showCreateUser">
+          + Tạo tài khoản
+        </button>
+      </div>
+
+      <div id="usersList">Đang tải danh sách...</div>
+
+      <div id="createUserArea" class="hidden">
+        <hr>
+        <h3>Tạo tài khoản mới</h3>
+
+        <form id="newUserForm">
+          <div class="g2">
+            <div class="full">
+              <label>Email đăng nhập</label>
+              <input id="newEmail" type="email" required>
+            </div>
+
+            <div class="full">
+              <label>Mật khẩu (ít nhất 8 ký tự)</label>
+              <input id="newPassword" type="password" minlength="8" required>
+            </div>
+
+            <div class="full">
+              <label>Quyền</label>
+              <select id="newRole">
+                <option value="staff">Nhân viên</option>
+                <option value="manager">Quản lý</option>
+              </select>
+            </div>
+          </div>
+
+          <div class="err" id="newUserError"></div>
+
+          <div class="mfoot">
+            <button type="button" id="cancelCreateUser">Hủy</button>
+            <button class="primary">Tạo tài khoản</button>
+          </div>
+        </form>
+      </div>
+    `);
+
+    const errorBox = $('#usersError');
+    const listBox = $('#usersList');
+    const createArea = $('#createUserArea');
+
+    $('#closeUsers').onclick = closeModal;
+
+    $('#showCreateUser').onclick = () => {
+      createArea.classList.toggle('hidden');
+    };
+
+    $('#cancelCreateUser').onclick = () => {
       createArea.classList.add('hidden');
+    };
 
-      await loadUsers();
+    async function loadUsers() {
+      listBox.innerHTML = 'Đang tải danh sách...';
+      errorBox.textContent = '';
 
-    } catch (error) {
-      console.error('Create user error:', error);
-      formError.textContent = error.message || 'Không tạo được tài khoản';
+      try {
+        const result = await callAdmin('list');
+        const users = result.users || [];
+
+        if (!users.length) {
+          listBox.innerHTML = '<p>Chưa có tài khoản nào.</p>';
+          return;
+        }
+
+        listBox.innerHTML = users.map(user => {
+          const isMe = user.id === state.me?.id;
+          const roleName =
+            user.role === 'manager' ? 'Quản lý' : 'Nhân viên';
+
+          return `
+            <div style="
+              border:1px solid var(--border,#ddd);
+              border-radius:8px;
+              padding:12px;
+              margin-bottom:10px;
+            ">
+              <div style="font-weight:600;overflow-wrap:anywhere">
+                ${esc(user.email)}
+                ${isMe ? '<small>(Bạn)</small>' : ''}
+              </div>
+
+              <div style="margin:6px 0">
+                Quyền: <strong>${roleName}</strong>
+              </div>
+
+              ${!isMe ? `
+                <div style="display:flex;gap:6px;flex-wrap:wrap;margin-top:10px">
+                  <button type="button"
+                    data-action="role"
+                    data-id="${esc(user.id)}"
+                    data-role="${esc(user.role)}">
+                    Đổi quyền
+                  </button>
+
+                  <button type="button"
+                    data-action="password"
+                    data-id="${esc(user.id)}">
+                    Đặt lại mật khẩu
+                  </button>
+
+                  <button type="button"
+                    data-action="delete"
+                    data-id="${esc(user.id)}"
+                    style="color:#dc2626">
+                    Xóa tài khoản
+                  </button>
+                </div>
+              ` : ''}
+            </div>
+          `;
+        }).join('');
+
+      } catch (error) {
+        console.error('Load users error:', error);
+        listBox.innerHTML = '';
+        errorBox.textContent =
+          error.message || 'Không tải được danh sách tài khoản.';
+      }
     }
-  };
 
-  // Xử lý các nút trong danh sách
-  listBox.addEventListener('click', async e => {
-    const btn = e.target.closest('button[data-action]');
-    if (!btn) return;
+    $('#newUserForm').onsubmit = async e => {
+      e.preventDefault();
 
-    const action = btn.dataset.action;
-    const id = btn.dataset.id;
+      const email = $('#newEmail').value.trim();
+      const password = $('#newPassword').value;
+      const role = $('#newRole').value;
+      const formError = $('#newUserError');
+      const submit = $('#newUserForm').querySelector('button.primary');
 
-    try {
-      if (action === 'role') {
-        const currentRole = btn.dataset.role;
-        const newRole = currentRole === 'manager' ? 'staff' : 'manager';
-        const roleName = newRole === 'manager' ? 'Quản lý' : 'Nhân viên';
+      if (password.length < 8) {
+        formError.textContent = 'Mật khẩu cần ít nhất 8 ký tự.';
+        return;
+      }
 
-        if (!confirm(`Bạn muốn đổi quyền tài khoản này thành ${roleName}?`)) {
-          return;
-        }
+      submit.disabled = true;
+      formError.textContent = 'Đang tạo tài khoản...';
 
-        await callAdmin('update_role', { id, role: newRole });
+      try {
+        await callAdmin('create', { email, password, role });
 
-        toast('Đã cập nhật quyền tài khoản');
+        toast('Đã tạo tài khoản thành công.');
+
+        $('#newUserForm').reset();
+        createArea.classList.add('hidden');
+
         await loadUsers();
+
+      } catch (error) {
+        console.error('Create user error:', error);
+        formError.textContent =
+          error.message || 'Không tạo được tài khoản.';
+      } finally {
+        submit.disabled = false;
       }
+    };
 
-      else if (action === 'password') {
-        const password = prompt('Nhập mật khẩu mới (ít nhất 8 ký tự):');
+    listBox.addEventListener('click', async e => {
+      const button = e.target.closest('button[data-action]');
+      if (!button) return;
 
-        if (password === null) return;
+      const action = button.dataset.action;
+      const id = button.dataset.id;
 
-        if (password.length < 8) {
-          alert('Mật khẩu cần ít nhất 8 ký tự.');
-          return;
+      button.disabled = true;
+
+      try {
+        if (action === 'role') {
+          const currentRole = button.dataset.role;
+          const newRole =
+            currentRole === 'manager' ? 'staff' : 'manager';
+
+          const roleName =
+            newRole === 'manager' ? 'Quản lý' : 'Nhân viên';
+
+          if (!confirm(
+            `Bạn muốn đổi quyền tài khoản này thành ${roleName}?`
+          )) return;
+
+          await callAdmin('update_role', {
+            id,
+            role: newRole
+          });
+
+          toast('Đã cập nhật quyền tài khoản.');
+          await loadUsers();
+
+        } else if (action === 'password') {
+          const password = prompt(
+            'Nhập mật khẩu mới (ít nhất 8 ký tự):'
+          );
+
+          if (password === null) return;
+
+          if (password.length < 8) {
+            alert('Mật khẩu cần ít nhất 8 ký tự.');
+            return;
+          }
+
+          await callAdmin('reset_password', {
+            id,
+            password
+          });
+
+          toast('Đã đặt lại mật khẩu.');
+
+        } else if (action === 'delete') {
+          if (!confirm(
+            'Bạn chắc chắn muốn xóa tài khoản này? Người dùng sẽ không thể đăng nhập nữa.'
+          )) return;
+
+          await callAdmin('delete', { id });
+
+          toast('Đã xóa tài khoản.');
+          await loadUsers();
         }
 
-        await callAdmin('reset_password', { id, password });
-
-        toast('Đã đặt lại mật khẩu');
+      } catch (error) {
+        console.error('Manage user error:', error);
+        alert(error.message || 'Không thực hiện được thao tác.');
+      } finally {
+        button.disabled = false;
       }
+    });
 
-      else if (action === 'delete') {
-        if (!confirm(
-          'Bạn chắc chắn muốn xóa tài khoản này? Người dùng sẽ không thể đăng nhập nữa.'
-        )) {
-          return;
-        }
-
-        await callAdmin('delete', { id });
-
-        toast('Đã xóa tài khoản');
-        await loadUsers();
-      }
-
-    } catch (error) {
-      console.error('Manage user error:', error);
-      alert(error.message || 'Không thực hiện được thao tác');
-    }
-  });
-
-  await loadUsers();
-}
+    await loadUsers();
+  }
 
   /* ---------- CHANGE PASSWORD ---------- */
 
@@ -1729,26 +2011,39 @@ async function usersModal() {
 
       const oldPassword = $('#p0').value;
       const newPassword = $('#p1').value;
+      const errorBox = $('#pe');
+      const submit = $('#pf').querySelector('button.primary');
 
       if (newPassword.length < 8) {
-        $('#pe').textContent = 'Mật khẩu mới tối thiểu 8 ký tự';
+        errorBox.textContent = 'Mật khẩu mới tối thiểu 8 ký tự.';
         return;
       }
 
       if (newPassword !== $('#p2').value) {
-        $('#pe').textContent = 'Nhập lại mật khẩu không khớp';
+        errorBox.textContent = 'Nhập lại mật khẩu không khớp.';
         return;
       }
 
-      try {
-        const { error: loginError } = await db.auth.signInWithPassword({
-          email: state.me.email,
-          password: oldPassword
-        });
+      if (oldPassword === newPassword) {
+        errorBox.textContent = 'Mật khẩu mới phải khác mật khẩu hiện tại.';
+        return;
+      }
 
-        if (loginError) {
-          throw new Error('Mật khẩu hiện tại không đúng');
+      submit.disabled = true;
+      errorBox.textContent = 'Đang kiểm tra mật khẩu hiện tại...';
+
+      try {
+        const { error: verifyError } =
+          await verifyClient.auth.signInWithPassword({
+            email: state.me.email,
+            password: oldPassword
+          });
+
+        if (verifyError) {
+          throw new Error('Mật khẩu hiện tại không đúng.');
         }
+
+        await verifyClient.auth.signOut();
 
         const { error } = await db.auth.updateUser({
           password: newPassword
@@ -1757,27 +2052,43 @@ async function usersModal() {
         if (error) throw error;
 
         closeModal();
-        toast('Đã đổi mật khẩu');
+        toast('Đã đổi mật khẩu thành công.');
 
       } catch (error) {
-        $('#pe').textContent = error.message;
+        console.error('Change password error:', error);
+        errorBox.textContent =
+          error.message || 'Không đổi được mật khẩu.';
+      } finally {
+        submit.disabled = false;
       }
     };
   }
 
-  /* ---------- BACKUP ---------- */
+  /* ---------- BACKUP / EXPORT ---------- */
 
   function exportData() {
-    const blob = new Blob([
-      JSON.stringify({
-        rooms: state.rooms,
-        bookings: state.bookings
-      }, null, 2)
-    ], { type: 'application/json' });
+    if (!isMgr()) {
+      toast('Bạn không có quyền sao lưu dữ liệu.', true);
+      return;
+    }
 
+    const backup = {
+      app: 'hotel-booking',
+      version: 1,
+      exportedAt: new Date().toISOString(),
+      rooms: state.rooms,
+      bookings: state.bookings
+    };
+
+    const blob = new Blob(
+      [JSON.stringify(backup, null, 2)],
+      { type: 'application/json' }
+    );
+
+    const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
-    a.href = URL.createObjectURL(blob);
 
+    a.href = url;
     a.download =
       'lich-dat-phong-' +
       new Date().toISOString().slice(0, 10) +
@@ -1785,47 +2096,167 @@ async function usersModal() {
 
     a.click();
 
-    setTimeout(() => URL.revokeObjectURL(a.href), 2000);
+    setTimeout(() => URL.revokeObjectURL(url), 2000);
+    toast('Đã tạo file sao lưu.');
   }
 
+  /* ---------- IMPORT / RESTORE ---------- */
+
   $('#importFile').onchange = e => {
-    const f = e.target.files[0];
+    const file = e.target.files[0];
     e.target.value = '';
 
-    if (!f) return;
+    if (!file) return;
 
-    const r = new FileReader();
+    if (!isMgr()) {
+      toast('Bạn không có quyền khôi phục dữ liệu.', true);
+      return;
+    }
 
-    r.onload = async () => {
+    const reader = new FileReader();
+
+    reader.onload = async () => {
       try {
-        const j = JSON.parse(r.result);
+        const json = JSON.parse(reader.result);
 
         if (
-          !Array.isArray(j.rooms) ||
-          !Array.isArray(j.bookings)
+          !Array.isArray(json.rooms) ||
+          !Array.isArray(json.bookings)
         ) {
-          throw new Error('File không đúng định dạng');
+          throw new Error('File không đúng định dạng.');
         }
 
-        if (!confirm('Khôi phục sẽ thay thế dữ liệu hiện tại. Tiếp tục?')) {
-          return;
+        const roomIds = new Set();
+
+        for (const room of json.rooms) {
+          if (!room.id || !room.name) {
+            throw new Error('Dữ liệu phòng trong file không hợp lệ.');
+          }
+
+          if (roomIds.has(room.id)) {
+            throw new Error('File có mã phòng bị trùng.');
+          }
+
+          roomIds.add(room.id);
         }
 
-        state.rooms = j.rooms;
-        state.bookings = j.bookings;
+        const bookingIds = new Set();
 
-        await saveAll();
+        for (const booking of json.bookings) {
+          if (
+            !booking.id ||
+            !booking.roomId ||
+            !Number.isFinite(Number(booking.start)) ||
+            !Number.isFinite(Number(booking.end)) ||
+            Number(booking.end) <= Number(booking.start)
+          ) {
+            throw new Error('Dữ liệu booking trong file không hợp lệ.');
+          }
 
-        renderGrid();
-        toast('Đã gửi dữ liệu khôi phục lên hệ thống');
+          if (!roomIds.has(booking.roomId)) {
+            throw new Error(
+              `Booking ${booking.name || booking.id} đang tham chiếu đến phòng không tồn tại trong file.`
+            );
+          }
+
+          if (bookingIds.has(booking.id)) {
+            throw new Error('File có mã booking bị trùng.');
+          }
+
+          bookingIds.add(booking.id);
+        }
+
+        if (!confirm(
+          `Khôi phục ${json.rooms.length} phòng và ${json.bookings.length} booking?\n\nDữ liệu hiện tại sẽ được thay thế trên máy chủ. Bạn nên sao lưu trước khi tiếp tục.`
+        )) return;
+
+        const oldRooms = state.rooms;
+        const oldBookings = state.bookings;
+
+        state.rooms = json.rooms;
+        state.bookings = json.bookings;
+
+        // Ghi các dữ liệu trong bản sao lưu lên Supabase.
+        const roomRows = state.rooms.map(room => ({
+          id: room.id,
+          data: room
+        }));
+
+        const bookingRows = state.bookings.map(booking => ({
+          id: booking.id,
+          data: booking
+        }));
+
+        try {
+          // Xóa dữ liệu cũ trước khi thay thế.
+          const { error: deleteBookingsError } = await db
+            .from('hp_bookings')
+            .delete()
+            .neq('id', '');
+
+          if (deleteBookingsError) throw deleteBookingsError;
+
+          const { error: deleteRoomsError } = await db
+            .from('hp_rooms')
+            .delete()
+            .neq('id', '');
+
+          if (deleteRoomsError) throw deleteRoomsError;
+
+          if (roomRows.length) {
+            const { error } = await db
+              .from('hp_rooms')
+              .insert(roomRows);
+
+            if (error) throw error;
+          }
+
+          if (bookingRows.length) {
+            const { error } = await db
+              .from('hp_bookings')
+              .insert(bookingRows);
+
+            if (error) throw error;
+          }
+
+          sv(LS.rooms, state.rooms);
+          sv(LS.bookings, state.bookings);
+
+          renderGrid();
+          toast('Đã khôi phục dữ liệu thành công.');
+
+        } catch (error) {
+          console.error('Restore error:', error);
+
+          // Khôi phục dữ liệu đang có trên giao diện.
+          state.rooms = oldRooms;
+          state.bookings = oldBookings;
+
+          renderGrid();
+
+          toast(
+            'Khôi phục thất bại: ' + error.message +
+            '. Hãy kiểm tra dữ liệu Supabase trước khi thử lại.',
+            true
+          );
+        }
 
       } catch (error) {
-        toast(error.message || 'File không hợp lệ', true);
+        console.error('Import error:', error);
+        toast(error.message || 'File sao lưu không hợp lệ.', true);
       }
     };
 
-    r.readAsText(f);
+    reader.readAsText(file);
   };
+
+  /* ---------- AUTH STATE ---------- */
+
+  db.auth.onAuthStateChange(async (event) => {
+    if (event === 'PASSWORD_RECOVERY') {
+      setTimeout(recoveryModal, 0);
+    }
+  });
 
   /* ---------- START ---------- */
 
@@ -1845,6 +2276,8 @@ async function usersModal() {
     console.error('App startup error:', error);
     await db.auth.signOut();
     showLogin();
+    $('#le').textContent =
+      error.message || 'Không khởi động được ứng dụng.';
   }
 
 })();
