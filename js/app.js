@@ -1455,7 +1455,7 @@ async function usersModal() {
 
   const callAdmin = async (action, extra = {}) => {
     const { data, error } = await db.functions.invoke(
-      'create-staff-user',
+      'dynamic-processor',
       { body: { action, ...extra } }
     );
 
