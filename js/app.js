@@ -1443,8 +1443,49 @@
 
   /* ---------- USERS ---------- */
 
-  function usersModal() {
-    openModal(`<h3>Tạo tài khoản</h3>
+  
+async function usersModal() {
+  const escapeHTML = value => String(value ?? '').replace(/[&<>"']/g, char => ({
+    '&': '&amp;',
+    '<': '&lt;',
+    '>': '&gt;',
+    '"': '&quot;',
+    "'": '&#39;'
+  })[char]);
+
+  const callAdmin = async (action, extra = {}) => {
+    const { data, error } = await db.functions.invoke(
+      'create-staff-user',
+      { body: { action, ...extra } }
+    );
+
+    if (error) throw error;
+    if (data?.error) throw new Error(data.error);
+
+    return data;
+  };
+
+  openModal(`
+    <div style="display:flex;justify-content:space-between;align-items:center;gap:10px">
+      <h3>Quản lý tài khoản</h3>
+      <button type="button" id="closeUsers">Đóng</button>
+    </div>
+
+    <div id="usersError" class="err"></div>
+
+    <div style="display:flex;justify-content:space-between;align-items:center;margin:12px 0">
+      <strong>Danh sách tài khoản</strong>
+      <button type="button" class="primary" id="showCreateUser">
+        + Tạo tài khoản
+      </button>
+    </div>
+
+    <div id="usersList">Đang tải danh sách...</div>
+
+    <div id="createUserArea" class="hidden">
+      <hr>
+      <h3>Tạo tài khoản mới</h3>
+
       <form id="newUserForm">
         <div class="g2">
           <div class="full">
@@ -1469,48 +1510,187 @@
         <div class="err" id="newUserError"></div>
 
         <div class="mfoot">
-          <button type="button" id="closeUser">Đóng</button>
+          <button type="button" id="cancelCreateUser">Hủy</button>
           <button class="primary">Tạo tài khoản</button>
         </div>
-      </form>`);
+      </form>
+    </div>
+  `);
 
-    $('#closeUser').onclick = closeModal;
+  const errorBox = $('#usersError');
+  const listBox = $('#usersList');
+  const createArea = $('#createUserArea');
 
-    $('#newUserForm').onsubmit = async e => {
-      e.preventDefault();
+  $('#closeUsers').onclick = closeModal;
 
-      const email = $('#newEmail').value.trim();
-      const password = $('#newPassword').value;
-      const role = $('#newRole').value;
-      const errorBox = $('#newUserError');
+  $('#showCreateUser').onclick = () => {
+    createArea.classList.toggle('hidden');
+  };
 
-      if (password.length < 8) {
-        errorBox.textContent = 'Mật khẩu cần ít nhất 8 ký tự';
+  $('#cancelCreateUser').onclick = () => {
+    createArea.classList.add('hidden');
+  };
+
+  // Tải danh sách tài khoản
+  async function loadUsers() {
+    listBox.innerHTML = 'Đang tải danh sách...';
+    errorBox.textContent = '';
+
+    try {
+      const result = await callAdmin('list');
+      const users = result.users || [];
+
+      if (!users.length) {
+        listBox.innerHTML = '<p>Chưa có tài khoản nào.</p>';
         return;
       }
 
-      errorBox.textContent = 'Đang tạo tài khoản...';
+      listBox.innerHTML = users.map(u => {
+        const isMe = u.id === state.me?.id;
+        const roleName = u.role === 'manager' ? 'Quản lý' : 'Nhân viên';
 
-      try {
-        const { data, error } = await db.functions.invoke(
-          'create-staff-user',
-          {
-            body: { email, password, role }
-          }
-        );
+        return `
+          <div style="
+            border:1px solid var(--border,#ddd);
+            border-radius:8px;
+            padding:12px;
+            margin-bottom:10px;
+          ">
+            <div style="font-weight:600;overflow-wrap:anywhere">
+              ${escapeHTML(u.email)}
+              ${isMe ? '<small>(Bạn)</small>' : ''}
+            </div>
 
-        if (error) throw error;
-        if (data?.error) throw new Error(data.error);
+            <div style="margin:6px 0">
+              Quyền: <strong>${roleName}</strong>
+            </div>
 
-        closeModal();
-        toast('Đã tạo tài khoản thành công');
+            ${!isMe ? `
+              <div style="display:flex;gap:6px;flex-wrap:wrap;margin-top:10px">
+                <button type="button"
+                  data-action="role"
+                  data-id="${escapeHTML(u.id)}"
+                  data-role="${escapeHTML(u.role)}">
+                  Đổi quyền
+                </button>
 
-      } catch (error) {
-        console.error(error);
-        errorBox.textContent = error.message || 'Không tạo được tài khoản';
-      }
-    };
+                <button type="button"
+                  data-action="password"
+                  data-id="${escapeHTML(u.id)}">
+                  Đặt lại mật khẩu
+                </button>
+
+                <button type="button"
+                  data-action="delete"
+                  data-id="${escapeHTML(u.id)}"
+                  style="color:#dc2626">
+                  Xóa tài khoản
+                </button>
+              </div>
+            ` : ''}
+          </div>
+        `;
+      }).join('');
+
+    } catch (error) {
+      console.error('Load users error:', error);
+      listBox.innerHTML = '';
+      errorBox.textContent = error.message || 'Không tải được danh sách tài khoản';
+    }
   }
+
+  // Tạo tài khoản
+  $('#newUserForm').onsubmit = async e => {
+    e.preventDefault();
+
+    const email = $('#newEmail').value.trim();
+    const password = $('#newPassword').value;
+    const role = $('#newRole').value;
+    const formError = $('#newUserError');
+
+    if (password.length < 8) {
+      formError.textContent = 'Mật khẩu cần ít nhất 8 ký tự';
+      return;
+    }
+
+    formError.textContent = 'Đang tạo tài khoản...';
+
+    try {
+      await callAdmin('create', { email, password, role });
+
+      toast('Đã tạo tài khoản thành công');
+
+      $('#newUserForm').reset();
+      createArea.classList.add('hidden');
+
+      await loadUsers();
+
+    } catch (error) {
+      console.error('Create user error:', error);
+      formError.textContent = error.message || 'Không tạo được tài khoản';
+    }
+  };
+
+  // Xử lý các nút trong danh sách
+  listBox.addEventListener('click', async e => {
+    const btn = e.target.closest('button[data-action]');
+    if (!btn) return;
+
+    const action = btn.dataset.action;
+    const id = btn.dataset.id;
+
+    try {
+      if (action === 'role') {
+        const currentRole = btn.dataset.role;
+        const newRole = currentRole === 'manager' ? 'staff' : 'manager';
+        const roleName = newRole === 'manager' ? 'Quản lý' : 'Nhân viên';
+
+        if (!confirm(`Bạn muốn đổi quyền tài khoản này thành ${roleName}?`)) {
+          return;
+        }
+
+        await callAdmin('update_role', { id, role: newRole });
+
+        toast('Đã cập nhật quyền tài khoản');
+        await loadUsers();
+      }
+
+      else if (action === 'password') {
+        const password = prompt('Nhập mật khẩu mới (ít nhất 8 ký tự):');
+
+        if (password === null) return;
+
+        if (password.length < 8) {
+          alert('Mật khẩu cần ít nhất 8 ký tự.');
+          return;
+        }
+
+        await callAdmin('reset_password', { id, password });
+
+        toast('Đã đặt lại mật khẩu');
+      }
+
+      else if (action === 'delete') {
+        if (!confirm(
+          'Bạn chắc chắn muốn xóa tài khoản này? Người dùng sẽ không thể đăng nhập nữa.'
+        )) {
+          return;
+        }
+
+        await callAdmin('delete', { id });
+
+        toast('Đã xóa tài khoản');
+        await loadUsers();
+      }
+
+    } catch (error) {
+      console.error('Manage user error:', error);
+      alert(error.message || 'Không thực hiện được thao tác');
+    }
+  });
+
+  await loadUsers();
+}
 
   /* ---------- CHANGE PASSWORD ---------- */
 
