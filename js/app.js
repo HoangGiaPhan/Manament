@@ -229,8 +229,15 @@
       .single();
 
     if (profileError || !profile) {
-      throw new Error('Không tìm thấy hồ sơ phân quyền. Hãy kiểm tra hp_profiles.');
-    }
+  console.error('Profile query failed:', profileError);
+
+  throw new Error(
+    'Lỗi hồ sơ: ' +
+    (profileError?.message || 'Không có dữ liệu') +
+    ' | Code: ' +
+    (profileError?.code || 'N/A')
+  );
+}
 
     if (!['manager', 'staff'].includes(profile.role)) {
       throw new Error('Tài khoản chưa được cấp quyền hợp lệ.');
