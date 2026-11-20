@@ -1,3 +1,4 @@
+
 <!DOCTYPE html>
 <html lang="vi">
 <head>
@@ -11,37 +12,70 @@
 <div id="login" class="login hidden">
   <h2>🏨 Lịch đặt phòng</h2>
   <p>Đăng nhập để xem và đặt lịch</p>
+
   <form id="lf">
-    <div class="f"><label>Email</label><<input id="lu" type="email" autocomplete="email" required>></div>
-    <div class="f"><label>Mật khẩu</label><input id="lp" type="password" autocomplete="current-password" required></div>
+    <div class="f">
+      <label>Email</label>
+      <input id="lu" type="email" autocomplete="email" required>
+    </div>
+
+    <div class="f">
+      <label>Mật khẩu</label>
+      <input id="lp" type="password" autocomplete="current-password" required>
+    </div>
+
     <div class="err" id="le"></div>
     <button class="primary" style="width:100%">Đăng nhập</button>
   </form>
-  <div class="hint hidden" id="lh">Tài khoản mặc định: <b>admin</b> / <b>admin123</b> (quản lý) hoặc <b>nhanvien</b> / <b>123456</b>. Hãy đổi mật khẩu sau khi đăng nhập.</div>
+
+  <button type="button" id="forgotPassword" class="text-btn">
+    Quên mật khẩu?
+  </button>
 </div>
 
 <div id="app" class="hidden" style="display:flex;flex-direction:column;flex:1;min-height:0">
   <header class="top">
     <div class="brand">🏨 Lịch đặt phòng</div>
+
     <div class="datebar">
       <button id="prev" title="Ngày trước">‹</button>
       <input type="text" id="dpick" placeholder="DD/MM/YY" inputmode="numeric" aria-label="Ngày xem lịch">
       <button id="next" title="Ngày sau">›</button>
       <button id="today">Hôm nay</button>
     </div>
-    <div class="search"><input id="q" placeholder="🔍 Tìm tên / SĐT khách..." autocomplete="off"><div id="qres" class="qres hidden"></div></div>
+
+    <div class="search">
+      <input id="q" placeholder="🔍 Tìm tên / SĐT khách..." autocomplete="off">
+      <div id="qres" class="qres hidden"></div>
+    </div>
+
     <div class="spacer"></div>
     <button class="primary" id="addBk">+ Thêm khách</button>
-    <div class="usermenu"><button id="umBtn"></button><div id="um" class="pop hidden"></div></div>
+
+    <div class="usermenu">
+      <button id="umBtn"></button>
+      <div id="um" class="pop hidden"></div>
+    </div>
   </header>
+
   <div class="sub">
     <span id="sum"></span>
-    <span class="legend"><span><i class="s-wait"></i>Giữ chỗ</span><span><i class="s-dep"></i>Đã cọc</span><span><i class="s-in"></i>Đang ở</span><span><i class="s-out"></i>Đã trả</span><span><i class="s-cancel"></i>Đã hủy</span></span>
+    <span class="legend">
+      <span><i class="s-wait"></i>Giữ chỗ</span>
+      <span><i class="s-dep"></i>Đã cọc</span>
+      <span><i class="s-in"></i>Đang ở</span>
+      <span><i class="s-out"></i>Đã trả</span>
+      <span><i class="s-cancel"></i>Đã hủy</span>
+    </span>
   </div>
+
   <div class="gridwrap" id="gw"></div>
 </div>
 
-<div id="modal" class="overlay hidden"><div class="modal" id="mbox"></div></div>
+<div id="modal" class="overlay hidden">
+  <div class="modal" id="mbox"></div>
+</div>
+
 <input type="file" id="importFile" accept="application/json" class="hidden">
 <div id="toast"></div>
 
