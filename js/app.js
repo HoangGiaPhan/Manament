@@ -253,13 +253,17 @@ let realtimeRefreshTimer = null;
     if (roomsError) throw roomsError;
 
     const { data: bookingRows, error: bookingsError } = await db
-      .from('hp_bookings')
-      .select('id,data');
+  .from('hp_bookings')
+  .select('id,data,version');
 
-    if (bookingsError) throw bookingsError;
+if (bookingsError) throw bookingsError;
 
-    state.rooms = (roomRows || []).map(x => x.data);
-    state.bookings = (bookingRows || []).map(x => x.data);
+state.rooms = (roomRows || []).map(x => x.data);
+
+state.bookings = (bookingRows || []).map(x => ({
+  ...x.data,
+  version: Number(x.version)
+}));
 
     // Chỉ tạo phòng mặc định khi quản lý đăng nhập lần đầu
     if (state.rooms.length === 0 && profile.role === 'manager') {
@@ -289,6 +293,47 @@ let realtimeRefreshTimer = null;
       role: profile.role
     };
   }
+   async function saveBooking(booking, expectedVersion) {
+  if (!state.me) return false;
+
+  const { version, ...bookingData } = booking;
+
+  try {
+    const { data, error } = await db.rpc(
+      'save_booking_if_version',
+      {
+        p_id: booking.id,
+        p_data: bookingData,
+        p_expected_version: expectedVersion
+      }
+    );
+
+    if (error) throw error;
+
+    // Có máy khác đã cập nhật booking trước
+    if (data === null) {
+      await loadUserData(state.me);
+      renderGrid();
+
+      toast(
+        'Booking đã được thay đổi trên thiết bị khác. Dữ liệu mới đã được tải lại.',
+        true
+      );
+
+      return false;
+    }
+
+    booking.version = Number(data);
+    sv(LS.bookings, state.bookings);
+
+    return true;
+
+  } catch (error) {
+    console.error('Save booking error:', error);
+    toast('Không lưu được booking: ' + error.message, true);
+    return false;
+  }
+}
 
   async function saveAll() {
     sv(LS.rooms, state.rooms);
@@ -1045,16 +1090,22 @@ startRealtimeSync(user);
         return;
       }
 
-      booking.start = start;
-      booking.end = end;
-      booking.roomId = roomId;
-      booking.updatedBy = state.me.username;
+      const expectedVersion = Number(booking.version || 0);
 
-      renderGrid();
+booking.start = start;
+booking.end = end;
+booking.roomId = roomId;
+booking.updatedBy = state.me.username;
 
-      saveAll().then(ok => {
-        if (ok) toast('Đã cập nhật lịch: ' + booking.name);
-      });
+renderGrid();
+
+saveBooking(booking, expectedVersion).then(ok => {
+  if (ok) {
+    toast('Đã cập nhật lịch: ' + booking.name);
+  } else {
+    renderGrid();
+  }
+});
 
     } else {
       if (a.sb) a.sb.remove();
