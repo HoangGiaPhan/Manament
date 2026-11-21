@@ -165,6 +165,8 @@
     me: null,
     date: sod(new Date())
   };
+   let realtimeChannel = null;
+let realtimeRefreshTimer = null;
 
   const isMgr = () =>
     state.me?.role === 'manager';
@@ -357,6 +359,64 @@
     $('#lu').focus();
   }
 
+   /* ---------- REALTIME SYNC ---------- */
+
+function stopRealtimeSync() {
+  if (realtimeRefreshTimer) {
+    clearTimeout(realtimeRefreshTimer);
+    realtimeRefreshTimer = null;
+  }
+
+  if (realtimeChannel) {
+    db.removeChannel(realtimeChannel);
+    realtimeChannel = null;
+  }
+}
+
+function startRealtimeSync(user) {
+  stopRealtimeSync();
+
+  realtimeChannel = db
+    .channel('hotel-booking-sync')
+    .on(
+      'postgres_changes',
+      {
+        event: '*',
+        schema: 'public',
+        table: 'hp_bookings'
+      },
+      () => refreshRealtimeData(user)
+    )
+    .on(
+      'postgres_changes',
+      {
+        event: '*',
+        schema: 'public',
+        table: 'hp_rooms'
+      },
+      () => refreshRealtimeData(user)
+    )
+    .subscribe(status => {
+      console.log('Realtime status:', status);
+    });
+}
+
+function refreshRealtimeData(user) {
+  if (realtimeRefreshTimer) {
+    clearTimeout(realtimeRefreshTimer);
+  }
+
+  realtimeRefreshTimer = setTimeout(async () => {
+    try {
+      await loadUserData(user);
+      renderGrid();
+      console.log('Đã đồng bộ dữ liệu mới.');
+    } catch (error) {
+      console.error('Realtime sync error:', error);
+    }
+  }, 500);
+}
+
   function enterApp(user) {
     state.me = user;
 
@@ -369,18 +429,20 @@
     $('#dpick').value = dateStr(state.date);
 
     renderGrid();
-    scrollDefault();
+scrollDefault();
+startRealtimeSync(user);
   }
 
   async function logout() {
-    await db.auth.signOut();
+  stopRealtimeSync();
+  await db.auth.signOut();
 
-    state.me = null;
-    state.rooms = [];
-    state.bookings = [];
+  state.me = null;
+  state.rooms = [];
+  state.bookings = [];
 
-    showLogin();
-  }
+  showLogin();
+}
 
   $('#lf').addEventListener('submit', async e => {
     e.preventDefault();
