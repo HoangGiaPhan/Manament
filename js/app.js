@@ -1,4 +1,3 @@
-
 /* =========================================================
    HOTEL BOOKING APP - COMPLETE SUPABASE VERSION
    ========================================================= */
@@ -167,6 +166,7 @@
   };
    let realtimeChannel = null;
 let realtimeRefreshTimer = null;
+let renderTimer = null;
 
   const isMgr = () =>
     state.me?.role === 'manager';
@@ -226,8 +226,6 @@ let realtimeRefreshTimer = null;
 
   /* ---------- SUPABASE DATA ---------- */
 
-  let syncQueue = Promise.resolve();
-
   async function loadUserData(user) {
     const { data: profile, error: profileError } = await db
       .from('hp_profiles')
@@ -258,19 +256,24 @@ let realtimeRefreshTimer = null;
 
 if (bookingsError) throw bookingsError;
 
-state.rooms = (roomRows || []).map(x => x.data);
+// Thứ tự phòng lưu trong data.order (DB không đảm bảo thứ tự khi select)
+state.rooms = (roomRows || [])
+  .map(x => x.data)
+  .sort((a, b) => (a.order ?? 1e9) - (b.order ?? 1e9));
 
 state.bookings = (bookingRows || []).map(x => ({
   ...x.data,
+  id: x.id,
   version: Number(x.version)
 }));
 
     // Chỉ tạo phòng mặc định khi quản lý đăng nhập lần đầu
     if (state.rooms.length === 0 && profile.role === 'manager') {
-      state.rooms = ['101', '102', '103', '104', '105'].map(n => ({
+      state.rooms = ['101', '102', '103', '104', '105'].map((n, i) => ({
         id: uid(),
         name: 'Phòng ' + n,
-        type: ''
+        type: '',
+        order: i
       }));
 
       const { error } = await db
@@ -283,9 +286,6 @@ state.bookings = (bookingRows || []).map(x => ({
       if (error) throw error;
     }
 
-    sv(LS.rooms, state.rooms);
-    sv(LS.bookings, state.bookings);
-
     return {
       id: profile.id,
       email: profile.email,
@@ -293,87 +293,87 @@ state.bookings = (bookingRows || []).map(x => ({
       role: profile.role
     };
   }
-   async function saveBooking(booking, expectedVersion) {
-  if (!state.me) return false;
+  /* ---------- LƯU DỮ LIỆU (CHỐNG GHI ĐÈ BẰNG VERSION) ----------
+     Mọi thao tác ghi booking đều đi qua saveBooking():
+       1. Gửi kèm version mà máy này ĐÃ NHÌN THẤY (expectedVersion).
+       2. Server chỉ ghi nếu version trong DB vẫn đúng bằng số đó, rồi tăng version thêm 1.
+       3. Nếu máy khác đã sửa trước -> server trả null -> mình tải lại dữ liệu mới, KHÔNG ghi đè.
+     State chỉ thay đổi SAU KHI server xác nhận (không sửa trước rồi hoàn tác). */
 
-  const { version, ...bookingData } = booking;
-
-  try {
-    const { data, error } = await db.rpc(
-      'save_booking_if_version',
-      {
-        p_id: booking.id,
-        p_data: bookingData,
-        p_expected_version: expectedVersion
-      }
-    );
-
-    if (error) throw error;
-
-    // Có máy khác đã cập nhật booking trước
-    if (data === null) {
-      await loadUserData(state.me);
-      renderGrid();
-
-      toast(
-        'Booking đã được thay đổi trên thiết bị khác. Dữ liệu mới đã được tải lại.',
-        true
-      );
-
-      return false;
-    }
-
-    booking.version = Number(data);
-    sv(LS.bookings, state.bookings);
-
-    return true;
-
-  } catch (error) {
-    console.error('Save booking error:', error);
-    toast('Không lưu được booking: ' + error.message, true);
-    return false;
-  }
-}
-
-  async function saveAll() {
-    sv(LS.rooms, state.rooms);
-    sv(LS.bookings, state.bookings);
-
+  async function saveBooking(candidate, expectedVersion) {
     if (!state.me) return false;
 
-    const roomsSnapshot = state.rooms.map(room => ({
-      id: room.id,
-      data: room
-    }));
+    const { version, ...bookingData } = candidate;
 
-    const bookingsSnapshot = state.bookings.map(booking => ({
-      id: booking.id,
-      data: booking
-    }));
-
-    syncQueue = syncQueue.then(async () => {
-      if (isMgr()) {
-        const { error } = await db
-          .from('hp_rooms')
-          .upsert(roomsSnapshot);
-
-        if (error) throw error;
-      }
-
-      const { error } = await db
-        .from('hp_bookings')
-        .upsert(bookingsSnapshot);
+    try {
+      const { data, error } = await db.rpc('save_booking_if_version', {
+        p_id: candidate.id,
+        p_data: bookingData,
+        p_expected_version: Number(expectedVersion) || 0
+      });
 
       if (error) throw error;
 
-      return true;
-    }).catch(error => {
-      console.error('Supabase sync error:', error);
-      toast('Lỗi đồng bộ dữ liệu: ' + error.message, true);
-      return false;
-    });
+      // null = version trong DB đã khác -> có người sửa trước
+      if (data === null || data === undefined) {
+        closeModal();
+        await loadUserData(state.me);
+        renderGrid();
 
-    return syncQueue;
+        toast(
+          'Booking vừa được người khác thay đổi. Đã tải lại dữ liệu mới, hãy kiểm tra rồi thao tác lại.',
+          true
+        );
+
+        return false;
+      }
+
+      candidate.version = Number(data);
+
+      const i = state.bookings.findIndex(b => b.id === candidate.id);
+      if (i >= 0) state.bookings[i] = candidate;
+      else state.bookings.push(candidate);
+
+      renderGrid();
+      return true;
+
+    } catch (error) {
+      console.error('Save booking error:', error);
+      toast('Không lưu được booking: ' + error.message, true);
+      return false;
+    }
+  }
+
+  /* Sửa 1 booking có sẵn: gộp "changes" vào bản sao rồi lưu với version đã thấy.
+     expectedVersion mặc định = version hiện có trong bộ nhớ; form truyền version lúc MỞ form. */
+  async function updateBooking(booking, changes, okMessage, expectedVersion = booking.version) {
+    const candidate = {
+      ...booking,
+      ...changes,
+      updatedBy: state.me.username
+    };
+
+    const ok = await saveBooking(candidate, expectedVersion);
+    if (ok && okMessage) toast(okMessage);
+
+    return ok;
+  }
+
+  /* Phòng ít khi sửa nên chỉ cần upsert đúng những phòng đã đổi (không ghi cả danh sách) */
+  async function saveRooms(rooms = state.rooms) {
+    if (!state.me || !isMgr()) return false;
+
+    const { error } = await db
+      .from('hp_rooms')
+      .upsert(rooms.map(room => ({ id: room.id, data: room })));
+
+    if (error) {
+      console.error('Save rooms error:', error);
+      toast('Lỗi lưu phòng: ' + error.message, true);
+      return false;
+    }
+
+    return true;
   }
 
   async function deleteRoomFromDatabase(roomId, bookingIds) {
@@ -404,63 +404,123 @@ state.bookings = (bookingRows || []).map(x => ({
     $('#lu').focus();
   }
 
-   /* ---------- REALTIME SYNC ---------- */
+  /* ---------- REALTIME SYNC ----------
+     - Booking: áp dụng TỪNG DÒNG thay đổi vào state (không tải lại toàn bộ).
+       Dòng nào có version <= version đang có thì bỏ qua (chính là "tiếng vọng" của lần lưu của mình).
+     - Phòng: ít đổi nên tải lại toàn bộ.
+     - Khi kết nối realtime (kể cả nối lại sau khi điện thoại ngủ / mất mạng) hoặc khi quay lại tab:
+       tải lại toàn bộ để bù các thay đổi bị lỡ. */
 
-function stopRealtimeSync() {
-  if (realtimeRefreshTimer) {
-    clearTimeout(realtimeRefreshTimer);
-    realtimeRefreshTimer = null;
-  }
+  function scheduleRender() {
+    clearTimeout(renderTimer);
 
-  if (realtimeChannel) {
-    db.removeChannel(realtimeChannel);
-    realtimeChannel = null;
-  }
-}
+    renderTimer = setTimeout(() => {
+      if (act) {            // đang kéo thả -> đợi xong mới vẽ lại, tránh làm hỏng thao tác
+        scheduleRender();
+        return;
+      }
 
-function startRealtimeSync(user) {
-  stopRealtimeSync();
-
-  realtimeChannel = db
-    .channel('hotel-booking-sync')
-    .on(
-      'postgres_changes',
-      {
-        event: '*',
-        schema: 'public',
-        table: 'hp_bookings'
-      },
-      () => refreshRealtimeData(user)
-    )
-    .on(
-      'postgres_changes',
-      {
-        event: '*',
-        schema: 'public',
-        table: 'hp_rooms'
-      },
-      () => refreshRealtimeData(user)
-    )
-    .subscribe(status => {
-      console.log('Realtime status:', status);
-    });
-}
-
-function refreshRealtimeData(user) {
-  if (realtimeRefreshTimer) {
-    clearTimeout(realtimeRefreshTimer);
-  }
-
-  realtimeRefreshTimer = setTimeout(async () => {
-    try {
-      await loadUserData(user);
       renderGrid();
-      console.log('Đã đồng bộ dữ liệu mới.');
-    } catch (error) {
-      console.error('Realtime sync error:', error);
+    }, 120);
+  }
+
+  function scheduleFullReload() {
+    clearTimeout(realtimeRefreshTimer);
+
+    realtimeRefreshTimer = setTimeout(async () => {
+      if (!state.me) return;
+
+      try {
+        await loadUserData(state.me);
+        scheduleRender();
+      } catch (error) {
+        console.error('Reload error:', error);
+      }
+    }, 400);
+  }
+
+  function onBookingChange(payload) {
+    if (!state.me) return;
+
+    if (payload.eventType === 'DELETE') {
+      const id = payload.old?.id;
+      if (!id) return;
+
+      const before = state.bookings.length;
+      state.bookings = state.bookings.filter(b => b.id !== id);
+
+      if (state.bookings.length !== before) scheduleRender();
+      return;
     }
-  }, 500);
-}
+
+    const row = payload.new;
+    if (!row?.id) return;
+
+    if (!row.data) {        // payload thiếu dữ liệu -> tải lại cho chắc
+      scheduleFullReload();
+      return;
+    }
+
+    const incoming = {
+      ...row.data,
+      id: row.id,
+      version: Number(row.version)
+    };
+
+    const i = state.bookings.findIndex(b => b.id === row.id);
+
+    if (i >= 0) {
+      if (Number(state.bookings[i].version || 0) >= incoming.version) return;
+      state.bookings[i] = incoming;
+    } else {
+      state.bookings.push(incoming);
+    }
+
+    scheduleRender();
+  }
+
+  function stopRealtimeSync() {
+    clearTimeout(realtimeRefreshTimer);
+    clearTimeout(renderTimer);
+    realtimeRefreshTimer = null;
+    renderTimer = null;
+
+    if (realtimeChannel) {
+      db.removeChannel(realtimeChannel);
+      realtimeChannel = null;
+    }
+  }
+
+  function startRealtimeSync() {
+    stopRealtimeSync();
+
+    realtimeChannel = db
+      .channel('hotel-booking-sync')
+      .on(
+        'postgres_changes',
+        { event: '*', schema: 'public', table: 'hp_bookings' },
+        onBookingChange
+      )
+      .on(
+        'postgres_changes',
+        { event: '*', schema: 'public', table: 'hp_rooms' },
+        scheduleFullReload
+      )
+      .subscribe(status => {
+        console.log('Realtime status:', status);
+
+        // SUBSCRIBED xảy ra lần đầu và cả mỗi lần nối lại -> đồng bộ bù
+        if (status === 'SUBSCRIBED') scheduleFullReload();
+      });
+  }
+
+  document.addEventListener('visibilitychange', () => {
+    if (!document.hidden && state.me) scheduleFullReload();
+  });
+
+  window.addEventListener('online', () => {
+    if (state.me) scheduleFullReload();
+  });
 
   function enterApp(user) {
     state.me = user;
@@ -782,7 +842,7 @@ startRealtimeSync(user);
 
   $('#today').onclick = () => setDate(new Date());
 
-  $('#dpick').on = e => {
+  $('#dpick').onchange = e => {
     const d = parseDateInput(e.target.value);
 
     if (!d) {
@@ -795,7 +855,7 @@ startRealtimeSync(user);
   };
 
   setInterval(() => {
-    if (state.me) {
+    if (state.me && !act) {
       renderGrid();
     }
   }, 60000);
@@ -1090,22 +1150,11 @@ startRealtimeSync(user);
         return;
       }
 
-      const expectedVersion = Number(booking.version || 0);
-
-booking.start = start;
-booking.end = end;
-booking.roomId = roomId;
-booking.updatedBy = state.me.username;
-
-renderGrid();
-
-saveBooking(booking, expectedVersion).then(ok => {
-  if (ok) {
-    toast('Đã cập nhật lịch: ' + booking.name);
-  } else {
-    renderGrid();
-  }
-});
+      // Thanh lịch giữ nguyên vị trí vừa kéo cho tới khi server xác nhận
+      updateBooking(booking, { start, end, roomId }, 'Đã cập nhật lịch: ' + booking.name)
+        .then(ok => {
+          if (!ok) renderGrid();
+        });
 
     } else {
       if (a.sb) a.sb.remove();
@@ -1159,7 +1208,7 @@ saveBooking(booking, expectedVersion).then(ok => {
 
   function openModal(html) {
     mbox.onclick = null;
-    mbox.on = null;
+    mbox.onchange = null;
     mbox.innerHTML = html;
     modal.classList.remove('hidden');
   }
@@ -1168,7 +1217,7 @@ saveBooking(booking, expectedVersion).then(ok => {
     modal.classList.add('hidden');
     mbox.innerHTML = '';
     mbox.onclick = null;
-    mbox.on = null;
+    mbox.onchange = null;
   }
 
   modal.addEventListener('mousedown', e => {
@@ -1201,6 +1250,9 @@ saveBooking(booking, expectedVersion).then(ok => {
       toast('Không tìm thấy booking này.', true);
       return;
     }
+
+    // Version tại thời điểm MỞ form. Nếu lúc bấm Lưu mà DB đã khác (người khác đã sửa) -> bị từ chối.
+    const openedVersion = Number(booking?.version || 0);
 
     const ds = state.date.getTime();
 
@@ -1368,16 +1420,17 @@ saveBooking(booking, expectedVersion).then(ok => {
           `Hủy booking của khách "${booking.name}"? Lịch sử sẽ được giữ lại.`
         )) return;
 
-        booking.status = 'cancel';
-        booking.cancelledAt = Date.now();
-        booking.cancelledBy = state.me.username;
-        booking.updatedBy = state.me.username;
+        const btn = $('#f_del');
+        btn.disabled = true;
 
-        closeModal();
-        renderGrid();
+        const ok = await updateBooking(booking, {
+          status: 'cancel',
+          cancelledAt: Date.now(),
+          cancelledBy: state.me.username
+        }, 'Đã hủy booking', openedVersion);
 
-        const ok = await saveAll();
-        if (ok) toast('Đã hủy booking');
+        if (ok) closeModal();
+        else btn.disabled = false;
       };
     }
 
@@ -1385,15 +1438,16 @@ saveBooking(booking, expectedVersion).then(ok => {
       $('#f_checkin').onclick = async () => {
         if (!confirm('Xác nhận khách nhận phòng ngay?')) return;
 
-        booking.actualStart = Date.now();
-        booking.status = 'in';
-        booking.updatedBy = state.me.username;
+        const btn = $('#f_checkin');
+        btn.disabled = true;
 
-        closeModal();
-        renderGrid();
+        const ok = await updateBooking(booking, {
+          actualStart: Date.now(),
+          status: 'in'
+        }, 'Đã ghi nhận giờ nhận phòng thực tế', openedVersion);
 
-        const ok = await saveAll();
-        if (ok) toast('Đã ghi nhận giờ nhận phòng thực tế');
+        if (ok) closeModal();
+        else btn.disabled = false;
       };
     }
 
@@ -1401,17 +1455,18 @@ saveBooking(booking, expectedVersion).then(ok => {
       $('#f_checkout').onclick = async () => {
         if (!confirm('Xác nhận khách trả phòng ngay?')) return;
 
+        const btn = $('#f_checkout');
+        btn.disabled = true;
+
         const now = Date.now();
 
-        booking.actualEnd = now;
-        booking.status = 'out';
-        booking.updatedBy = state.me.username;
+        const ok = await updateBooking(booking, {
+          actualEnd: now,
+          status: 'out'
+        }, 'Đã trả phòng lúc ' + fmtDT(now), openedVersion);
 
-        closeModal();
-        renderGrid();
-
-        const ok = await saveAll();
-        if (ok) toast('Đã trả phòng lúc ' + fmtDT(now));
+        if (ok) closeModal();
+        else btn.disabled = false;
       };
     }
 
@@ -1497,38 +1552,40 @@ saveBooking(booking, expectedVersion).then(ok => {
         return;
       }
 
-      if (booking) {
-        Object.assign(booking, nb, {
-          createdBy: booking.createdBy,
-          createdAt: booking.createdAt,
-          updatedBy: state.me.username
-        });
-      } else {
-        nb.createdBy = state.me.username;
-        nb.createdAt = Date.now();
-        state.bookings.push(nb);
-      }
+      const candidate = booking
+        ? {
+            ...booking,
+            ...nb,
+            createdBy: booking.createdBy,
+            createdAt: booking.createdAt,
+            updatedBy: state.me.username
+          }
+        : {
+            ...nb,
+            createdBy: state.me.username,
+            createdAt: Date.now()
+          };
 
       const submit = $('#bf').querySelector('button.primary');
       submit.disabled = true;
 
-      const oldDate = state.date.getTime();
+      // Gửi kèm version lúc MỞ form: nếu người khác đã sửa booking này trong lúc bạn đang nhập,
+      // server từ chối và app tải lại dữ liệu mới (không ghi đè).
+      const ok = await saveBooking(candidate, openedVersion);
+
+      if (!ok) {
+        submit.disabled = false;   // lỗi mạng: giữ form để bấm Lưu lại
+        return;
+      }
+
       closeModal();
 
-      if (nb.start < oldDate || nb.start >= oldDate + DAY) {
-        state.date = sod(new Date(nb.start));
-        $('#dpick').value = dateStr(state.date);
+      const day = state.date.getTime();
+      if (candidate.start < day || candidate.start >= day + DAY) {
+        setDate(new Date(candidate.start));
       }
 
-      renderGrid();
-
-      const ok = await saveAll();
-
-      if (ok) {
-        toast('Đã lưu booking thành công');
-      } else {
-        toast('Chưa đồng bộ được booking lên máy chủ. Vui lòng kiểm tra kết nối.', true);
-      }
+      toast('Đã lưu booking thành công');
     };
 
     setTimeout(() => $('#f_name')?.focus(), 30);
@@ -1687,7 +1744,7 @@ saveBooking(booking, expectedVersion).then(ok => {
     openModal('');
     draw();
 
-    mbox.on = async e => {
+    mbox.onchange = async e => {
       const target = e.target;
 
       if (!target.dataset.f) return;
@@ -1719,7 +1776,7 @@ saveBooking(booking, expectedVersion).then(ok => {
 
       state.rooms[index][field] = newValue;
 
-      const ok = await saveAll();
+      const ok = await saveRooms([state.rooms[index]]);
 
       if (!ok) {
         state.rooms[index][field] = oldValue;
@@ -1758,12 +1815,13 @@ saveBooking(booking, expectedVersion).then(ok => {
         const room = {
           id: uid(),
           name,
-          type
+          type,
+          order: state.rooms.reduce((m, r) => Math.max(m, r.order ?? 0), -1) + 1
         };
 
         state.rooms.push(room);
 
-        const ok = await saveAll();
+        const ok = await saveRooms([room]);
 
         if (!ok) {
           state.rooms = state.rooms.filter(r => r.id !== room.id);
@@ -1779,7 +1837,8 @@ saveBooking(booking, expectedVersion).then(ok => {
             [state.rooms[i], state.rooms[i - 1]];
         }
 
-        const ok = await saveAll();
+        state.rooms.forEach((r, k) => { r.order = k; });
+        const ok = await saveRooms();
         if (!ok) toast('Không lưu được thứ tự phòng.', true);
 
       } else if (d.dn !== undefined) {
@@ -1790,7 +1849,8 @@ saveBooking(booking, expectedVersion).then(ok => {
             [state.rooms[i], state.rooms[i + 1]];
         }
 
-        const ok = await saveAll();
+        state.rooms.forEach((r, k) => { r.order = k; });
+        const ok = await saveRooms();
         if (!ok) toast('Không lưu được thứ tự phòng.', true);
 
       } else if (d.del !== undefined) {
@@ -1814,9 +1874,6 @@ saveBooking(booking, expectedVersion).then(ok => {
 
           state.bookings = state.bookings.filter(b => b.roomId !== room.id);
           state.rooms.splice(index, 1);
-
-          sv(LS.rooms, state.rooms);
-          sv(LS.bookings, state.bookings);
 
           toast('Đã xóa phòng.');
 
@@ -2344,7 +2401,7 @@ async function pwModal() {
         const oldRooms = state.rooms;
         const oldBookings = state.bookings;
 
-        state.rooms = json.rooms;
+        state.rooms = json.rooms.map((r, i) => ({ order: i, ...r }));
         state.bookings = json.bookings;
 
         // Ghi các dữ liệu trong bản sao lưu lên Supabase.
@@ -2355,7 +2412,7 @@ async function pwModal() {
 
         const bookingRows = state.bookings.map(booking => ({
           id: booking.id,
-          data: booking
+          data: (({ version, ...rest }) => rest)(booking)   // version nằm ở cột riêng, không lưu trong data
         }));
 
         try {
@@ -2390,9 +2447,7 @@ async function pwModal() {
             if (error) throw error;
           }
 
-          sv(LS.rooms, state.rooms);
-          sv(LS.bookings, state.bookings);
-
+          await loadUserData(state.me);   // lấy lại version thật từ server
           renderGrid();
           toast('Đã khôi phục dữ liệu thành công.');
 
@@ -2422,6 +2477,10 @@ async function pwModal() {
   };
 
   /* ---------- START ---------- */
+
+  // Bản cũ từng cache tên/SĐT khách vào localStorage. Không dùng nữa -> xóa cho an toàn.
+  localStorage.removeItem(LS.rooms);
+  localStorage.removeItem(LS.bookings);
 
   try {
     const { data, error } = await db.auth.getSession();
