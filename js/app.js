@@ -339,6 +339,26 @@ state.bookings = (bookingRows || []).map(x => ({
 
     } catch (error) {
       console.error('Save booking error:', error);
+
+      // Database từ chối vì phòng đã có người đặt trùng giờ (2 người lưu cùng lúc)
+      if (error.code === '23P01' || /BOOKING_OVERLAP/.test(error.message || '')) {
+        closeModal();
+
+        try {
+          await loadUserData(state.me);
+          renderGrid();
+        } catch (e) {
+          console.error('Reload after overlap error:', e);
+        }
+
+        toast(
+          'Phòng này vừa được người khác đặt trùng giờ. Đã tải lại lịch, hãy chọn phòng hoặc giờ khác.',
+          true
+        );
+
+        return false;
+      }
+
       toast('Không lưu được booking: ' + error.message, true);
       return false;
     }
